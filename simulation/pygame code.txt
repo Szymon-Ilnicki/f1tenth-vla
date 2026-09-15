@@ -1,0 +1,89 @@
+import pygame
+import sys
+import math
+
+pygame.init()
+
+
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("F1TENTH Waypoint Track")
+
+clock = pygame.time.Clock()
+
+#Load track PNG
+track = pygame.image.load("track.png").convert()  # Your PNG track
+
+#Car properties
+car_width, car_height = 30, 15
+car_x, car_y = 200, 300  # start position
+angle = 0
+speed = 2.5  # forward speed
+
+#Waypoints
+waypoints = [
+    (260, 280),
+    (488, 261),
+    (500, 158),
+    (499, 68),
+    (684, 85),
+    (668, 453),
+    (121, 449),
+    (74, 304),
+    (60, 159),
+    (71, 59),
+    (315, 55),
+    (319, 142),
+    (171, 166),
+    (171, 290),
+]
+current_wp = 0  # index of current waypoint
+
+
+def distance(p1, p2):
+    return math.hypot(p2[0]-p1[0], p2[1]-p1[1])
+
+def angle_to_point(x, y, target_x, target_y):
+    dx = target_x - x
+    dy = target_y - y
+    return math.degrees(math.atan2(-dy, dx))  # pygame Y axis goes down
+
+running = True
+while running:
+    clock.tick(60)
+    screen.blit(track, (0, 0))
+
+    #Current target waypoint
+    target_x, target_y = waypoints[current_wp]
+
+    #Steering
+    target_angle = angle_to_point(car_x, car_y, target_x, target_y)
+    angle_diff = (target_angle - angle + 180) % 360 - 180  # keep between -180,180
+    steer = max(min(angle_diff, 5), -5)  # limit turn speed
+    angle += steer
+
+    #Acceleration
+    car_x += speed * math.cos(math.radians(angle))
+    car_y -= speed * math.sin(math.radians(angle))
+
+    #Check if reached waypoint
+    if distance((car_x, car_y), (target_x, target_y)) < 10:
+        current_wp = (current_wp + 1) % len(waypoints)
+
+    #Draw car
+    car_surface = pygame.Surface((car_width, car_height), pygame.SRCALPHA)
+    car_surface.fill((0, 0, 255))
+    rect = car_surface.get_rect(center=(car_x, car_y))
+    rotated_car = pygame.transform.rotate(car_surface, angle)
+    rotated_rect = rotated_car.get_rect(center=(car_x, car_y))
+    screen.blit(rotated_car, rotated_rect)
+
+    pygame.display.flip()
+
+  
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+pygame.quit()
+sys.exit()

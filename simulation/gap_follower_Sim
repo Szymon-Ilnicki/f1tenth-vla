@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+
+import math
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from ackermann_msgs.msg import AckermannDriveStamped
+
+
+class ScanDriveNode(Node):
+    def __init__(self):
+        super().__init__('scan_drive_node')
+
+        # Publisher sending steering + speed commands to the vehicle
+        self.publisher = self.create_publisher(
+            AckermannDriveStamped,
+            '/drive',
+            10
+        )
+
+        # Subscriber receives LiDAR scan data from the simulator
+        self.subscription = self.create_subscription(
+            LaserScan,
+            '/scan',
+            self.scan_callback,
+            10
+        )
+
+        self.get_logger().info('Follow-the-gap node started')
+
+    # Preprocess LiDAR data:
+    # remove invalid values (NaN, inf)
+    # clamp maximum distance
+    def preprocess_ranges(self, ranges, max_range=10.0):
+        processed = []
+        for r in ranges:
+            if math.isinf(r) or math.isnan(r) or r <= 0.0:
+                processed.append(0.0)
+            else:
+                processed.append(min(r, max_range))
+        return processed
+
+    # Find largest continuous region of free space (gap)
+    def find_max_gap(self, free_space_ranges):
+        best_start = 0
+        best_end = 0
+        current_start = None
+
+        for i, value in enumerate(free_space_ranges):
+            if value > 0.0:
+                if current_start is None:
+                    current_start = i
+            else:
+                if current_start is not None:
+                    current_end = i - 1
+                    if (current_end - current_start) > (best_end - best_start):
+                        best_start = current_start
+                        best_end = current_end
+                    current_start = None
+
+        # Handling case where gap continues until end
+        if current_start is not None:
+            current_end = len(free_space_ranges) - 1
+            if (current_end - current_start) > (best_end - best_start):
+                best_start = current_start
+                best_end = current_end
+
+        return best_start, best_end
+
+    # Main callback function (runs every time LiDAR updates)
+    def scan_callback(self, msg):
+        if not msg.ranges:
+            return
+
+        ranges = list(msg.ranges)
+        total = len(ranges)
+        mid = total // 2
+
+        # Focus only on forward-facing LiDAR region
+        half_window = 160
+        start = max(0, mid - half_window)
+        end = min(total, mid + half_window)
+        front_ranges = ranges[start:end]
+
+        if not front_ranges:
+            return
+
+        # Clean LiDAR data
+        proc_ranges = self.preprocess_ranges(front_ranges, max_range=10.0)
+
+        # Find closest obstacle
+        nonzero_ranges = [r for r in proc_ranges if r > 0.0]
+        if not nonzero_ranges:
+            return
+
+        closest_distance = min(nonzero_ranges)
+        closest_index = proc_ranges.index(closest_distance)
+
+        # Create safety bubble around closest obstacle
+        bubble_radius = 20
+        bubble_start = max(0, closest_index - bubble_radius)
+        bubble_end = min(len(proc_ranges) - 1, closest_index + bubble_radius)
+
+        for i in range(bubble_start, bubble_end + 1):
+            proc_ranges[i] = 0.0
+
+        # Find largest gap
+        gap_start, gap_end = self.find_max_gap(proc_ranges)
+        if gap_end <= gap_start:
+            self.get_logger().info('No valid gap found')
+            return
+
+        # Select midpoint of gap as target
+        best_index = (gap_start + gap_end) // 2
+
+        # Convert LiDAR index to steering angle
+        global_index = start + best_index
+        raw_angle = msg.angle_min + (global_index * msg.angle_increment)
+
+        # Applying steering gain and clamp to limits
+        steering_gain = 1.2
+        angle = raw_angle * steering_gain
+        angle = max(min(angle, 0.55), -0.55)
+
+        # Creating a drive message
+        drive_msg = AckermannDriveStamped()
+        drive_msg.drive.steering_angle = angle
+
+        abs_angle = abs(angle)
+
+        # Dynamic speed control:
+        # slow near obstacles
+        # slow during turns
+        if closest_distance < 0.20:
+            speed = 0.25
+        elif abs_angle > 0.25:
+            speed = 0.35
+        elif abs_angle > 0.12:
+            speed = 0.65
+        else:
+            speed = 1.0
+
+        drive_msg.drive.speed = speed
+
+        # Publishing control command
+        self.publisher.publish(drive_msg)
+
+        # Debug output (used for validation in report)
+        self.get_logger().info(
+            f'angle={angle:.2f} speed={speed:.2f} closest={closest_distance:.2f}'
+        )
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ScanDriveNode()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
+
+
+if __name__ == '__main__':
+    main()

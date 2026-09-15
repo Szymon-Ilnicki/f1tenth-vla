@@ -1,0 +1,22 @@
+teleop_twist_joy:
+  ros__parameters:
+    require_enable_button: true               # must hold enable to drive
+    enable_button: 7                          # 7 = RB on controller
+    enable_turbo_button: 9                    # 9 = RT on controller. Set -1 to disable
+    axis_linear:
+      x: 1                                    # throttle axis
+    scale_linear:
+      x: 1.0
+    inverted_linear:
+      x: true
+    axis_angular:
+      yaw: 2                                  # steering axis
+    scale_angular:
+      yaw: 0.8
+    inverted_angular:
+      yaw: false
+    # Optional turbo scales if using turbo button
+    scale_linear_turbo:
+      x: 2.0
+    scale_angular_turbo:
+      yaw: 1.5

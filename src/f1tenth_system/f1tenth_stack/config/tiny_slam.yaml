@@ -1,0 +1,38 @@
+slam_toolbox:
+  ros__parameters:
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    mode: mapping
+    max_laser_range: 30.0
+
+    resolution: 0.015
+
+    minimum_travel_distance: 0.015
+    minimum_travel_heading: 0.025
+    minimum_time_interval: 0.05
+
+    # Stronger loop closure for tiny track
+    loop_search_maximum_distance: 6.0
+    correlation_search_space_dimension: 2.0
+    correlation_search_space_resolution: 0.008
+    correlation_search_space_smear_deviation: 0.05
+    coarse_search_angle_offset: 2.094
+    coarse_angle_resolution: 0.052
+    loop_search_minimum_response_coarse: 0.06
+    loop_search_minimum_response_fine: 0.42
+
+    do_loop_closing: true
+    use_scan_matching: true
+    use_scan_barycenter: true
+
+    map_update_interval: 0.15
+    scan_queue_size: 150
+    tf_buffer_duration: 240.0
+    transform_tolerance: 0.5
+    transform_publish_period: 0.01
+
+    debug_logging: true
+    enable_interactive_mode: true
+

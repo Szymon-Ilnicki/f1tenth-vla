@@ -1,7 +1,0 @@
-global_planner_node:
-  ros__parameters:
-    frame_id: map
-    close_centerline_distance: 2.0
-    default_speed: 0.0
-    max_steering_angle: 0.4
-    

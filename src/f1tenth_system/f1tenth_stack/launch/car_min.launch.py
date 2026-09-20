@@ -32,8 +32,18 @@ def generate_launch_description():
     ))
     ld.add_action(Node(
         package='vesc_ackermann',
-        executable='ackermann_to_vesc_node',
-        name='ackermann_to_vesc_node',
+    executable='ackermann_to_vesc_node',
+    name='ackermann_to_vesc_node',
+    parameters=[LaunchConfiguration('vesc_config')],
+    remappings=[
+        ('commands/motor/speed', 'commands/motor/unsmoothed_speed'),
+        ('commands/servo/position', 'commands/servo/unsmoothed_position'),
+    ],
+    ))
+    ld.add_action(Node(
+        package='f1tenth_stack',
+        executable='throttle_interpolator',
+        name='throttle_interpolator',
         parameters=[LaunchConfiguration('vesc_config')],
     ))
     ld.add_action(Node(

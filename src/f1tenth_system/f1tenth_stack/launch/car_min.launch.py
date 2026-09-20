@@ -42,6 +42,15 @@ def generate_launch_description():
     ))
     ld.add_action(Node(
         package='f1tenth_stack',
+        executable='dummy_vla',
+        name='dummy_vla',
+        parameters=[{
+        'speed': 0.0,
+        'steering_angle': 0.0,
+    }],
+    ))
+    ld.add_action(Node(
+        package='f1tenth_stack',
         executable='throttle_interpolator',
         name='throttle_interpolator',
         parameters=[LaunchConfiguration('vesc_config')],

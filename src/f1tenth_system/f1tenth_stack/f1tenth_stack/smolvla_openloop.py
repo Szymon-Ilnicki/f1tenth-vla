@@ -11,6 +11,8 @@ from std_msgs.msg import Float32, Float32MultiArray, String
 import torch
 from transformers import AutoTokenizer
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from pathlib import Path
+
 
 
 def image_msg_to_nchw(msg: Image) -> torch.Tensor:
@@ -33,18 +35,28 @@ def image_msg_to_nchw(msg: Image) -> torch.Tensor:
 class SmolVLAOpenLoop(Node):
     def __init__(self):
         super().__init__("smolvla_openloop")
+
         self.declare_parameter("image_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("task", "drive forward")
         self.declare_parameter("rate_hz", 2.0)
         self.declare_parameter("n_action_steps", 10)
+        self.declare_parameter(
+            "model_path", "outputs/smoke/checkpoints/last/pretrained_model"
+        )
+
+        raw = self.get_parameter("model_path").value
+        model_dir = Path(raw).expanduser()
+        if not model_dir.is_absolute():
+            model_dir = Path.home() / "f1tenth-vla" / model_dir
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.get_logger().info(f"loading smolvla on {self.device}")
         self.policy = (
-            SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
+            SmolVLAPolicy.from_pretrained(str(model_dir))
             .to(self.device)
             .eval()
         )
+        self.get_logger().info(f"loaded {model_dir}")
         n = int(self.get_parameter("n_action_steps").value)
         n = max(1, min(n, int(self.policy.config.chunk_size)))
         self.policy.config.n_action_steps = n

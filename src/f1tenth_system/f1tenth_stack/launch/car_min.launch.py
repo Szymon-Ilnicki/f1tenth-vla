@@ -40,15 +40,15 @@ def generate_launch_description():
         ('commands/servo/position', 'commands/servo/unsmoothed_position'),
     ],
     ))
-    ld.add_action(Node(
-        package='f1tenth_stack',
-        executable='dummy_vla',
-        name='dummy_vla',
-        parameters=[{
-        'speed': 0.0,
-        'steering_angle': 0.0,
-    }],
-    ))
+#    ld.add_action(Node(
+#        package='f1tenth_stack',
+#        executable='dummy_vla',
+#        name='dummy_vla',
+#        parameters=[{
+#        'speed': 0.0,
+#        'steering_angle': 0.0,
+#    }],
+#    ))
     ld.add_action(Node(
         package='f1tenth_stack',
         executable='throttle_interpolator',

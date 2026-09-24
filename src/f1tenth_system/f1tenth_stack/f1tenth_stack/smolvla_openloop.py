@@ -36,6 +36,7 @@ class SmolVLAOpenLoop(Node):
         self.declare_parameter("image_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("task", "drive forward")
         self.declare_parameter("rate_hz", 2.0)
+        self.declare_parameter("n_action_steps", 10)
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.get_logger().info(f"loading smolvla on {self.device}")
@@ -43,6 +44,14 @@ class SmolVLAOpenLoop(Node):
             SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
             .to(self.device)
             .eval()
+        )
+        n = int(self.get_parameter("n_action_steps").value)
+        n = max(1, min(n, int(self.policy.config.chunk_size)))
+        self.policy.config.n_action_steps = n
+        self.policy.reset()
+        self.get_logger().info(
+            f"n_action_steps={self.policy.config.n_action_steps} "
+            f"chunk_size={self.policy.config.chunk_size}"
         )
         self.img_keys = list(self.policy.config.image_features)
         tok_name = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"

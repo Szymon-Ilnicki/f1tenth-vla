@@ -1,119 +1,110 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import numpy as np
-from rosbags.highlevel import AnyReader
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
+from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+from sensor_msgs.msg import Image
+from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
 BAGS = [
-    Path.home() / "bags" / "ep000",
-    Path.home() / "bags" / "ep002",
+    Path(__file__).resolve().parent / "ep000",
+    Path(__file__).resolve().parent / "ep001",
+    Path(__file__).resolve().parent / "ep002",
 ]
-OUT = Path.home() / "datasets" / "f1tenth_fwd_smoke"
+OUT = Path(__file__).resolve().parent / "outputs/fwd_v0"
 TASK = "drive forward"
 IMG_TOPIC = "/camera/camera/color/image_raw"
 CMD_TOPIC = "/ackermann_cmd"
 FPS = 10
 
-def decode_image(msg):
+def open_bag(path):
+    r = SequentialReader()
+    r.open(
+        StorageOptions(uri=str(path), storage_id="sqlite3"),
+        ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
+    )
+    return r
+
+
+def img_np(msg: Image):
     h, w = msg.height, msg.width
     arr = np.frombuffer(msg.data, dtype=np.uint8)
-    enc = msg.encoding.lower()
-    if enc in ("rgb8", "bgr8"):
+    if msg.encoding in ("rgb8", "bgr8"):
         img = arr.reshape(h, w, 3)
-        if enc == "bgr8":
-            img = img[:, :, ::-1]
-    elif enc in ("rgba8", "bgra8"):
-        img = arr.reshape(h, w, 4)[:, :, :3]
-        if enc == "bgra8":
-            img = img[:, :, ::-1]
-    else:
-        raise RuntimeError(f"unsupported encoding {msg.encoding}")
-    return np.ascontiguousarray(img)
+        if msg.encoding == "bgr8":
+            img = img[:, :, ::-1].copy()
+        return img
+    raise RuntimeError(msg.encoding)
 
-def cmd_to_vec(msg):
+
+def cmd_vec(msg):
     d = msg.drive if hasattr(msg, "drive") else msg
-    return np.array([float(d.speed), float(d.steering_angle)], dtype=np.float32)
+    return np.array([d.speed, d.steering_angle], dtype=np.float32)
 
-def read_bag(path: Path):
-    imgs, cmds = [], []
-    with AnyReader([path]) as reader:
-        for conn, ts, raw in reader.messages():
-            if conn.topic == IMG_TOPIC:
-                imgs.append((ts, decode_image(reader.deserialize(raw, conn.msgtype))))
-            elif conn.topic == CMD_TOPIC:
-                cmds.append((ts, cmd_to_vec(reader.deserialize(raw, conn.msgtype))))
-    return imgs, cmds
 
-def nearest_cmd(cmds, t):
-    if not cmds:
-        return np.zeros(2, dtype=np.float32)
-    i = min(range(len(cmds)), key=lambda k: abs(cmds[k][0] - t))
-    return cmds[i][1]
+def iter_synced(bag_dir):
+    reader = open_bag(bag_dir)
+    types = {c.name: get_message(c.type) for c in reader.get_all_topics_and_types()}
+    last_cmd = None
+    while reader.has_next():
+        topic, data, t = reader.read_next()
+        msg = deserialize_message(data, types[topic])
+        if topic == CMD_TOPIC:
+            last_cmd = cmd_vec(msg)
+        elif topic == IMG_TOPIC and last_cmd is not None:
+            yield t * 1e-9, img_np(msg), last_cmd
 
-def subsample(imgs, fps):
-    if len(imgs) < 2:
-        return imgs
-    dt = 1e9 / fps
-    out, next_t = [], imgs[0][0]
-    for t, im in imgs:
-        if t + 1e6 >= next_t:
-            out.append((t, im))
-            next_t = t + dt
-    return out
 
 def main():
-    first_imgs, _ = read_bag(BAGS[0])
-    h, w = first_imgs[0][1].shape[:2]
-    OUT.parent.mkdir(parents=True, exist_ok=True)
+    bags = BAGS
+    if not bags:
+        raise SystemExit(f"no bags in {BAGS}")
 
     ds = LeRobotDataset.create(
-        repo_id="local/f1tenth_fwd_smoke",
-        root=OUT,
+        repo_id="local/fwd_v1",
         fps=FPS,
         robot_type="f1tenth",
-        use_videos=True,
         features={
             "observation.images.camera1": {
                 "dtype": "video",
-                "shape": (h, w, 3),
+                "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
             },
-            "observation.state": {
-                "dtype": "float32",
-                "shape": (2,),
-                "names": ["speed", "steering"],
-            },
-            "action": {
-                "dtype": "float32",
-                "shape": (2,),
-                "names": ["speed", "steering"],
-            },
+            "action": {"dtype": "float32", "shape": (2,), "names": ["speed", "steering"]},
         },
+        root=str(OUT),
+        use_videos=True,
     )
 
-    for bag in BAGS:
-        print("reading", bag)
-        imgs, cmds = read_bag(bag)
-        frames = subsample(imgs, FPS)
-        print(f"  images={len(imgs)} cmds={len(cmds)} kept={len(frames)}")
-        if len(frames) < 5:
-            print("  skip, too short")
-            continue
-        for t, im in frames:
-            act = nearest_cmd(cmds, t)
+    for bag in bags:
+        print("episode", bag.name)
+        n = 0
+        t0 = None
+        last_keep = None
+        for t, img, act in iter_synced(bag):
+            if t0 is None:
+                t0 = t
+                last_keep = t - 1
+            if t - last_keep < 1.0 / FPS - 1e-3:
+                continue
+            last_keep = t
             ds.add_frame(
                 {
-                    "observation.images.camera1": im,
-                    "observation.state": act,
+                    "observation.images.camera1": img,
                     "action": act,
                     "task": TASK,
                 }
             )
+            n += 1
+        if n == 0:
+            print("  skipped (no synced frames — check CMD_TOPIC)")
+            continue
         ds.save_episode()
+        print("  frames", n)
 
-    if hasattr(ds, "finalize"):
-        ds.finalize()
     print("wrote", OUT)
+
 
 if __name__ == "__main__":
     main()

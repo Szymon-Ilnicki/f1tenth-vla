@@ -13,7 +13,21 @@ from transformers import AutoTokenizer
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from pathlib import Path
 
+def resolve_model_dir(model_path: str) -> Path:
+    p = Path(model_path).expanduser()
+    if p.is_absolute() and p.is_dir():
+        return p
 
+    # smolvla_openloop.py is at
+    # <repo>/src/f1tenth_system/f1tenth_stack/f1tenth_stack/smolvla_openloop.py
+    repo_root = Path(__file__).resolve().parents[4]
+    candidate = (repo_root / p).resolve()
+    if candidate.is_dir():
+        return candidate
+
+    raise FileNotFoundError(
+        f"model not found: {model_path} (tried {candidate})"
+    )
 
 def image_msg_to_nchw(msg: Image) -> torch.Tensor:
     h, w = msg.height, msg.width
@@ -45,9 +59,7 @@ class SmolVLAOpenLoop(Node):
         )
 
         raw = self.get_parameter("model_path").value
-        model_dir = Path(raw).expanduser()
-        if not model_dir.is_absolute():
-            model_dir = Path.home() / "f1tenth-vla" / model_dir
+        model_dir = resolve_model_dir(self.get_parameter("model_path").value)
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.get_logger().info(f"loading smolvla on {self.device}")

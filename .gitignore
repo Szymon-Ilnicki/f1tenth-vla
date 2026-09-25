@@ -4,5 +4,5 @@ log/
 *.data
 *.posegraph
 *.sh
-bags/
 outputs/
+bags/ep*

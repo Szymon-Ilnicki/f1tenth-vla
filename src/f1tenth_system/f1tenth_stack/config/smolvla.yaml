@@ -2,7 +2,7 @@ smolvla_openloop:
   ros__parameters:
     policy_id: "lerobot/smolvla_base"
     device: "cuda"
-    model_path: "outputs/smoke/checkpoints/last/pretrained_model"
+    model_path: "models/fwd_v0/checkpoints/last/pretrained_model"
     image_topic: "/camera/camera/color/image_raw"
     task: "drive forward"
     rate_hz: 2.0

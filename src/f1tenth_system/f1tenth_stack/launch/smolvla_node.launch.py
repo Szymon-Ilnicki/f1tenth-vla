@@ -29,6 +29,11 @@ def generate_launch_description():
         ],
         output="screen",
         emulate_tty=True,
+        additional_env={
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HOME": "/home/hwf1tenth/.cache/huggingface",
+        },
     )
     adapter = ExecuteProcess(
         cmd=[

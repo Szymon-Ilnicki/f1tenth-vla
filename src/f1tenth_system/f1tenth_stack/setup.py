@@ -27,7 +27,8 @@ setup(
             'throttle_interpolator = f1tenth_stack.throttle_interpolator:main',
             'tf_publisher = f1tenth_stack.tf_publisher:main',
             'dummy_vla = f1tenth_stack.dummy_vla:main',
-	    'smolvla_openloop = f1tenth_stack.smolvla_openloop:main'
+	        'smolvla_openloop = f1tenth_stack.smolvla_openloop:main',
+            'pid_controller = f1tenth_stack.pid_controller:main'
         ],
     },
 )

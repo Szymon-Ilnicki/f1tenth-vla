@@ -30,12 +30,12 @@ def generate_launch_description():
         name='joy_teleop',
         parameters=[LaunchConfiguration('joy_config')],
     ))
-    ld.add_action(Node(
-        package='vesc_ackermann',
-    executable='ackermann_to_vesc_node',
-    name='ackermann_to_vesc_node',
-    parameters=[LaunchConfiguration('vesc_config')],
-    ))
+#    ld.add_action(Node(
+#        package='vesc_ackermann',
+#    executable='ackermann_to_vesc_node',
+#    name='ackermann_to_vesc_node',
+#    parameters=[LaunchConfiguration('vesc_config')],
+#    ))
     ld.add_action(Node(
         package='vesc_ackermann',
         executable='vesc_to_odom_node',

@@ -24,7 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'throttle_interpolator = f1tenth_stack.throttle_interpolator:main',
+#            'throttle_interpolator = f1tenth_stack.throttle_interpolator:main',
             'tf_publisher = f1tenth_stack.tf_publisher:main',
             'dummy_vla = f1tenth_stack.dummy_vla:main',
 	        'smolvla_openloop = f1tenth_stack.smolvla_openloop:main',

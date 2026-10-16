@@ -31,11 +31,30 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('joy_config')],
     ))
     ld.add_action(Node(
-        package='f1tenth_stack',
-        executable='throttle_interpolator',
-        name='throttle_interpolator',
-        parameters=[LaunchConfiguration('vesc_config')],
+        package='vesc_ackermann',
+    executable='ackermann_to_vesc_node',
+    name='ackermann_to_vesc_node',
+    parameters=[LaunchConfiguration('vesc_config')],
+#    remappings=[
+#        ('commands/motor/speed', 'commands/motor/unsmoothed_speed'),
+#        ('commands/servo/position', 'commands/servo/unsmoothed_position'),
+#    ],
     ))
+#    ld.add_action(Node(
+#        package='f1tenth_stack',
+#        executable='dummy_vla',
+#        name='dummy_vla',
+#        parameters=[{
+#        'speed': 0.0,
+#        'steering_angle': 0.0,
+#    }],
+#    ))
+#    ld.add_action(Node(
+#        package='f1tenth_stack',
+#        executable='throttle_interpolator',
+#        name='throttle_interpolator',
+#        parameters=[LaunchConfiguration('vesc_config')],
+#    ))
     ld.add_action(Node(
         package='vesc_ackermann',
         executable='vesc_to_odom_node',

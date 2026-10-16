@@ -48,7 +48,7 @@ class PidTracker(Node):
         self.create_subscription(Odometry, '/odom', self.on_odom, 10)
         self.pub_servo = self.create_publisher(Float64, '/commands/servo/position', 10)
         self.pub_speed = self.create_publisher(Float64, '/commands/motor/speed', 10)
-        self.create_timer(0.1, self.tick)  # 10 Hz
+        self.create_timer(0.01, self.tick)  # 100 Hz
 
     def on_setpoint(self, msg):
         self.target_speed = msg.drive.speed

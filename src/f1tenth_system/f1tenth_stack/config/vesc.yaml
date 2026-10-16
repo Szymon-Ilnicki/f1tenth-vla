@@ -56,3 +56,10 @@ throttle_interpolator:
     # servo smoother - limits rotation speed and smooths anything above limit
     max_servo_speed: 3.2 # radians/second
     servo_smoother_rate: 75.0 # messages/sec
+pid_controller:
+  ros__parameters:
+    kp: 0.8
+    ki: 0.0
+    kd: 0.0
+    i_limit: 0.4
+    steer_rate: 1.0

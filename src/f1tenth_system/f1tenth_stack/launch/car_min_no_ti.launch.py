@@ -35,26 +35,7 @@ def generate_launch_description():
     executable='ackermann_to_vesc_node',
     name='ackermann_to_vesc_node',
     parameters=[LaunchConfiguration('vesc_config')],
-#    remappings=[
-#        ('commands/motor/speed', 'commands/motor/unsmoothed_speed'),
-#        ('commands/servo/position', 'commands/servo/unsmoothed_position'),
-#    ],
     ))
-#    ld.add_action(Node(
-#        package='f1tenth_stack',
-#        executable='dummy_vla',
-#        name='dummy_vla',
-#        parameters=[{
-#        'speed': 0.0,
-#        'steering_angle': 0.0,
-#    }],
-#    ))
-#    ld.add_action(Node(
-#        package='f1tenth_stack',
-#        executable='throttle_interpolator',
-#        name='throttle_interpolator',
-#        parameters=[LaunchConfiguration('vesc_config')],
-#    ))
     ld.add_action(Node(
         package='vesc_ackermann',
         executable='vesc_to_odom_node',
@@ -73,6 +54,12 @@ def generate_launch_description():
         name='ackermann_mux',
         parameters=[LaunchConfiguration('mux_config')],
         remappings=[('ackermann_cmd_out', 'ackermann_drive')],
+    ))
+    ld.add_action(Node(
+    package='f1tenth_stack',          # or wherever you put it
+    executable='pid_controller',
+    name='pid_controller',
+    parameters=[LaunchConfiguration('vesc_config')],  # reuse the same yaml for gains, limits, rates
     ))
 
     return ld

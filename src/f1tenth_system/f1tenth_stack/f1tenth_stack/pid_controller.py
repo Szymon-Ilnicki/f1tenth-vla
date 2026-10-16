@@ -64,12 +64,16 @@ class PidTracker(Node):
         if dt <= 0.0 or dt > 0.5:
             return
 
-        error = self.target_speed - self.measured_speed
-        self.integral = max(-self.i_limit, min(self.i_limit, self.integral + error * dt))
-        derivative = (error - self.prev_error) / dt
-        self.prev_error = error
-        speed = self.kp * error + self.ki * self.integral + self.kd * derivative
-        speed = max(-self.speed_max, min(self.speed_max, speed))
+        if abs(self.target_speed) < 0.05:          # dead-band
+            self.integral = 0.0
+            output = 0.0
+        else:
+            error = self.target_speed - self.measured_speed
+            self.integral = max(-self.i_limit, min(self.i_limit, self.integral + error * dt))
+            derivative = (error - self.prev_error) / dt
+            self.prev_error = error
+            speed = self.kp * error + self.ki * self.integral + self.kd * derivative
+            speed = max(-self.speed_max, min(self.speed_max, speed))
 
         step = self.steer_rate * dt
         delta = max(-step, min(step, self.target_steer - self.cmd_steer))

@@ -58,8 +58,8 @@ throttle_interpolator:
     servo_smoother_rate: 75.0 # messages/sec
 pid_controller:
   ros__parameters:
-    kp: 0.8
-    ki: 0.0
+    kp: 0.4
+    ki: 0.4
     kd: 0.0
     i_limit: 0.4
-    steer_rate: 1.0
+    steer_rate: 2.0

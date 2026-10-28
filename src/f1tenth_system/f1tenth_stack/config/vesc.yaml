@@ -61,5 +61,5 @@ pid_controller:
     kp: 0.4
     ki: 0.4
     kd: 0.0
-    i_limit: 0.4
+    i_limit: 0.8
     steer_rate: 2.0

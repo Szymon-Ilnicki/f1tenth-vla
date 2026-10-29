@@ -1,0 +1,79 @@
+#!/bin/bash
+# save as ~/start_full_stack.sh
+# chmod +x ~/start_full_stack.sh
+
+# === CONFIG ===
+ROS_SETUP="/opt/ros/humble/setup.bash"
+WORKSPACE_SETUP="install/setup.bash"
+CAR_LAUNCH="src/f1tenth_system/f1tenth_stack/launch/car_cam.launch.py"
+BAG_MANAGER_DIR="../ros2bag_manager"
+BAG_MANAGER_CMD="uv run app.py"
+# ===========================
+
+# Source ROS
+source "$ROS_SETUP" 2>/dev/null || true
+[ -f "$WORKSPACE_SETUP" ] && source "$WORKSPACE_SETUP"
+
+# Wake lock so Termux is less likely to be killed
+termux-wake-lock 2>/dev/null || true
+
+echo "Starting camera stack..."
+ros2 launch "$CAR_LAUNCH" &
+LAUNCH_PID=$!
+echo "Camera stack PID: $LAUNCH_PID"
+
+# Give the launch a moment
+sleep 3
+
+echo "Starting bag manager..."
+cd "$BAG_MANAGER_DIR" || { echo "Bag manager dir not found"; exit 1; }
+$BAG_MANAGER_CMD &
+BAG_PID=$!
+echo "Bag manager PID: $BAG_PID"
+
+echo ""
+echo "Both running. Bag manager should be at http://<phone-ip>:8000"
+echo "Press Ctrl+C to stop everything."
+
+# Wait and clean up on exit
+trap "kill $LAUNCH_PID $BAG_PID 2>/dev/null; termux-wake-unlock 2>/dev/null; exit" INT TERM
+wait#!/bin/bash
+# save as ~/start_full_stack.sh
+# chmod +x ~/start_full_stack.sh
+
+# === CONFIG ===
+ROS_SETUP="/opt/ros/humble/setup.bash"
+WORKSPACE_SETUP="install/setup.bash"
+CAR_LAUNCH="src/f1tenth_system/f1tenth_stack/launch/car_cam.launch.py"
+BAG_MANAGER_DIR="../ros2bag_manager"
+BAG_MANAGER_CMD="uv run app.py"                 
+# ===========================
+
+# Source ROS
+source "$ROS_SETUP" 2>/dev/null || true
+[ -f "$WORKSPACE_SETUP" ] && source "$WORKSPACE_SETUP"
+
+# Wake lock so Termux is less likely to be killed
+termux-wake-lock 2>/dev/null || true
+
+echo "Starting camera stack..."
+ros2 launch "$CAR_LAUNCH" &
+LAUNCH_PID=$!
+echo "Camera stack PID: $LAUNCH_PID"
+
+# Give the launch a moment
+sleep 3
+
+echo "Starting bag manager..."
+cd "$BAG_MANAGER_DIR" || { echo "Bag manager dir not found"; exit 1; }
+$BAG_MANAGER_CMD &
+BAG_PID=$!
+echo "Bag manager PID: $BAG_PID"
+
+echo ""
+echo "Both running. Bag manager should be at http://<phone-ip>:8000"
+echo "Press Ctrl+C to stop everything."
+
+# Wait and clean up on exit
+trap "kill $LAUNCH_PID $BAG_PID 2>/dev/null; termux-wake-unlock 2>/dev/null; exit" INT TERM
+wait

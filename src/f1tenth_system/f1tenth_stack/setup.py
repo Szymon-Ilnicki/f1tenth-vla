@@ -28,7 +28,8 @@ setup(
             'tf_publisher = f1tenth_stack.tf_publisher:main',
             'dummy_vla = f1tenth_stack.dummy_vla:main',
 	        'smolvla_openloop = f1tenth_stack.smolvla_openloop:main',
-            'pid_controller = f1tenth_stack.pid_controller:main'
+            'pid_controller = f1tenth_stack.pid_controller:main',
+            'task_latch.py = f1tenth_stack.task_latch:main',
         ],
     },
 )

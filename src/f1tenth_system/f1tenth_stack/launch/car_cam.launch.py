@@ -4,11 +4,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
 
-# RGB-only RealSense D435i for OpenVLA preview / later inference. Only useful for testing the camera
-# enable_color=true
-# enable_depth=false          # depth off to save USB/CPU on the Orin Nano
-# rgb_camera.color_profile=640x480x15
-# Topic: /camera/camera/color/image_raw
+#This launch scripts extends on car_min.launch by adding camera module
 
 def generate_launch_description():
     car = IncludeLaunchDescription(

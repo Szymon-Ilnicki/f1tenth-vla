@@ -8,7 +8,7 @@ import os
 
 def generate_launch_description():
     pkg = get_package_share_directory('f1tenth_stack')
-    joy_teleop_config = os.path.join(pkg, 'config', 'joy_teleop.yaml')
+    joy_teleop_config = os.path.join(pkg, 'config', 'joy_teleop_XOBX.yaml')
     vesc_config = os.path.join(pkg, 'config', 'vesc.yaml')
     mux_config = os.path.join(pkg, 'config', 'mux.yaml')
 
@@ -56,10 +56,10 @@ def generate_launch_description():
         remappings=[('ackermann_cmd_out', 'ackermann_drive')],
     ))
     ld.add_action(Node(
-    package='f1tenth_stack',          # or wherever you put it
+    package='f1tenth_stack',
     executable='pid_controller',
     name='pid_controller',
-    parameters=[LaunchConfiguration('vesc_config')],  # reuse the same yaml for gains, limits, rates
+    parameters=[LaunchConfiguration('vesc_config')],
     ))
 
     return ld

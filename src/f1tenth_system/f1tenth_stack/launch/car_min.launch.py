@@ -8,7 +8,7 @@ import os
 
 def generate_launch_description():
     pkg = get_package_share_directory('f1tenth_stack')
-    joy_teleop_config = os.path.join(pkg, 'config', 'joy_teleop_XOBX.yaml')
+    joy_teleop_config = os.path.join(pkg, 'config', 'joy_teleop_XBOX.yaml')
     vesc_config = os.path.join(pkg, 'config', 'vesc.yaml')
     mux_config = os.path.join(pkg, 'config', 'mux.yaml')
 

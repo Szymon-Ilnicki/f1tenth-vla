@@ -8,7 +8,7 @@ import signal
 from datetime import datetime
 
 # ==================== CONFIG (edit these) ====================
-BAG_DIR = "/home/hwf1tenth/bags/fwd_v1"
+BAG_DIR = "/home/hwf1tenth/bags"
 BAG_PREFIX = "ep"
 TOPICS = [
     "/camera/camera/color/image_raw",

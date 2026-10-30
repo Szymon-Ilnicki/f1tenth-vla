@@ -8,18 +8,15 @@ import signal
 from datetime import datetime
 
 # ==================== CONFIG (edit these) ====================
-BAG_DIR = "/home/hwf1tenth/bags/fwd1"          # folder where bags will be saved
-BAG_PREFIX = "ep"                             # bags will be named <BAG_PREFIX>_YYYYMMDD_HHMMSS
-TOPICS = [                                    # topics to record (empty list = all topics)
+BAG_DIR = "/home/hwf1tenth/bags/fwd_v1"
+BAG_PREFIX = "ep"
+TOPICS = [
     "/camera/camera/color/image_raw",
     "/teleop",
     "/task",
-    # add more if needed
 ]
-START_BUTTON = 0      # button index for start (A / cross on many pads)
-STOP_BUTTON  = 1      # button index for stop  (B / circle)
-# If you prefer a single toggle button, set STOP_BUTTON = START_BUTTON
-
+START_BUTTON = 1
+STOP_BUTTON  = 2
 PWM_CHIP = 3
 PWM_CHANNEL = 0
 # =============================================================
@@ -27,7 +24,6 @@ PWM_CHANNEL = 0
 class BagRecorder(Node):
     def __init__(self):
         super().__init__('bag_recorder')
-        # Listen to the real joystick for start/stop buttons
         self.sub = self.create_subscription(Joy, '/joy', self.joy_cb, 10)
         self.proc = None
         self.recording = False
@@ -84,3 +80,32 @@ class BagRecorder(Node):
         except subprocess.TimeoutExpired:
             self.proc.kill()
         self.proc = None
+        self.recording = False
+        self.set_led(False)
+
+    def joy_cb(self, msg: Joy):
+        start_pressed = msg.buttons[START_BUTTON] if START_BUTTON < len(msg.buttons) else 0
+        stop_pressed  = msg.buttons[STOP_BUTTON]  if STOP_BUTTON  < len(msg.buttons) else 0
+
+        if start_pressed and not self.prev_start:
+            self.start_recording()
+        if stop_pressed and not self.prev_stop:
+            self.stop_recording()
+
+        self.prev_start = start_pressed
+        self.prev_stop = stop_pressed
+
+def main():
+    rclpy.init()
+    node = BagRecorder()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.stop_recording()
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

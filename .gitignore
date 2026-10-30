@@ -4,6 +4,7 @@ log/
 *.data
 *.posegraph
 *.sh
+*.save
 outputs/
 <<<<<<< Updated upstream
 bags/*

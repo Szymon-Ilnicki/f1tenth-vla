@@ -13,6 +13,10 @@ from transformers import AutoTokenizer
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from pathlib import Path
 
+# Measured average inference time. Not in the config on purpose.
+INFERENCE_TIME = 1.2
+
+
 def resolve_model_dir(model_path: str) -> Path:
     p = Path(model_path).expanduser()
     if p.is_absolute() and p.is_dir():
@@ -28,6 +32,7 @@ def resolve_model_dir(model_path: str) -> Path:
     raise FileNotFoundError(
         f"model not found: {model_path} (tried {candidate})"
     )
+
 
 def image_msg_to_nchw(msg: Image) -> torch.Tensor:
     h, w = msg.height, msg.width
@@ -58,7 +63,6 @@ class SmolVLAOpenLoop(Node):
             "model_path", "outputs/smoke/checkpoints/last/pretrained_model"
         )
 
-        raw = self.get_parameter("model_path").value
         model_dir = resolve_model_dir(self.get_parameter("model_path").value)
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -69,14 +73,26 @@ class SmolVLAOpenLoop(Node):
             .eval()
         )
         self.get_logger().info(f"loaded {model_dir}")
-        n = int(self.get_parameter("n_action_steps").value)
-        n = max(1, min(n, int(self.policy.config.chunk_size)))
-        self.policy.config.n_action_steps = n
+
+        # Config values (overridden by launch/config)
+        self.n_action_steps = int(self.get_parameter("n_action_steps").value)
+        self.n_action_steps = max(1, min(self.n_action_steps, int(self.policy.config.chunk_size)))
+        self.policy.config.n_action_steps = self.n_action_steps
         self.policy.reset()
+
+        self.rate_hz = float(self.get_parameter("rate_hz").value)
+        # How many control steps the inference takes
+        actions_to_cover = int(INFERENCE_TIME * self.rate_hz) + 1
+        # Trigger when this many actions remain so the next chunk is ready near the end
+        self.trigger_at = max(1, min(actions_to_cover, self.n_action_steps - 1))
+
         self.get_logger().info(
-            f"n_action_steps={self.policy.config.n_action_steps} "
-            f"chunk_size={self.policy.config.chunk_size}"
+            f"n_action_steps={self.n_action_steps} "
+            f"chunk_size={self.policy.config.chunk_size} "
+            f"rate_hz={self.rate_hz:.1f} "
+            f"trigger_at={self.trigger_at}"
         )
+
         self.img_keys = list(self.policy.config.image_features)
         tok_name = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
         self.tok = AutoTokenizer.from_pretrained(tok_name)
@@ -85,6 +101,9 @@ class SmolVLAOpenLoop(Node):
         self._set_task(self.get_parameter("task").value)
 
         self.latest = None
+        self.action_queue = []
+        self.inference_in_progress = False
+
         self.create_subscription(
             Image,
             self.get_parameter("image_topic").value,
@@ -95,7 +114,7 @@ class SmolVLAOpenLoop(Node):
         self.pub_act = self.create_publisher(Float32MultiArray, "/smolvla/action", 10)
         self.pub_dt = self.create_publisher(Float32, "/smolvla/infer_dt", 10)
 
-        period = 1.0 / max(self.get_parameter("rate_hz").value, 0.2)
+        period = 1.0 / max(self.rate_hz, 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(f"image keys {self.img_keys}")
 
@@ -112,14 +131,15 @@ class SmolVLAOpenLoop(Node):
     def _on_img(self, msg: Image):
         self.latest = msg
 
-    def _tick(self):
+    def _run_inference(self):
         if self.latest is None:
-            return
+            return None, 0.0
         try:
             img = image_msg_to_nchw(self.latest).to(self.device)
         except Exception as e:
             self.get_logger().error(str(e))
-            return
+            return None, 0.0
+
         state = torch.zeros(1, 6, device=self.device)
         batch = {
             "observation.state": state,
@@ -131,17 +151,38 @@ class SmolVLAOpenLoop(Node):
 
         t0 = time.perf_counter()
         with torch.no_grad():
-            out = self.policy.select_action(batch)
+            # select_action returns one action and manages its own queue internally.
+            # For early trigger we still call it; the local queue is filled from repeated calls
+            # or from a single chunk if the policy exposes it. Here we collect n_action_steps.
+            actions = []
+            for _ in range(self.n_action_steps):
+                out = self.policy.select_action(batch)
+                actions.append(out.detach().float().cpu().flatten().tolist())
         if self.device == "cuda":
             torch.cuda.synchronize()
         dt = time.perf_counter() - t0
+        return actions, dt
 
-        vec = out.detach().float().cpu().flatten().tolist()
-        act = Float32MultiArray()
-        act.data = vec
-        self.pub_act.publish(act)
-        self.pub_dt.publish(Float32(data=float(dt)))
-        self.get_logger().info(f"dt={dt:.3f}s action={['%.3f' % x for x in vec]}")
+    def _tick(self):
+        # Publish next action from the queue if available
+        if self.action_queue:
+            vec = self.action_queue.pop(0)
+            act = Float32MultiArray()
+            act.data = vec
+            self.pub_act.publish(act)
+
+        # Early trigger: start inference when remaining actions are low
+        if len(self.action_queue) <= self.trigger_at and not self.inference_in_progress:
+            self.inference_in_progress = True
+            actions, dt = self._run_inference()
+            self.inference_in_progress = False
+            if actions is not None:
+                self.action_queue.extend(actions)
+                self.pub_dt.publish(Float32(data=float(dt)))
+                self.get_logger().info(
+                    f"dt={dt:.3f}s queued {len(actions)} actions "
+                    f"(remaining={len(self.action_queue)})"
+                )
 
 
 def main():

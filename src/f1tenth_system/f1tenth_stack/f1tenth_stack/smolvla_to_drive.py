@@ -31,7 +31,7 @@ class SmolVLAToDrive(Node):
             self._on_act,
             10,
         )
-        self.create_timer(0.05, self._watchdog)
+        #self.create_timer(0.05, self._watchdog)
         self.get_logger().info(
             f"adapter {self.get_parameter('action_topic').value} -> "
             f"{self.get_parameter('drive_topic').value}"
@@ -58,12 +58,12 @@ class SmolVLAToDrive(Node):
         self.last_t = self.get_clock().now()
         self._pub(speed, steer)
 
-    def _watchdog(self):
-        if not self.have:
-            return
-        dt = (self.get_clock().now() - self.last_t).nanoseconds * 1e-9
-        if dt > self.stale_s:
-            self._pub(0.0, 0.0)
+    #def _watchdog(self):
+    #    if not self.have:
+    #        return
+    #    dt = (self.get_clock().now() - self.last_t).nanoseconds * 1e-9
+    #    if dt > self.stale_s:
+    #        self._pub(0.0, 0.0)
 
 
 def main():

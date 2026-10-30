@@ -62,4 +62,12 @@ def generate_launch_description():
     parameters=[LaunchConfiguration('vesc_config')],
     ))
 
+
+    ld.add_action(Node(
+        package='f1tenth_stack',
+        executable='task_latch.py',
+        name='task_latch',
+        output='screen'
+    ))
+
     return ld

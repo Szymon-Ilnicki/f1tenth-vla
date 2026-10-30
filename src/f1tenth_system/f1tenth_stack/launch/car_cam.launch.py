@@ -33,11 +33,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    task_latch_node = Node(
-        package='f1tenth_stack',          # package that contains task_latch.py
-        executable='task_latch.py',           # or 'task_latch' if you installed it as an entry point
-        name='task_latch',
-        output='screen'
-    )
+    
 
-    return LaunchDescription([car, cam, task_latch_node])
+    return LaunchDescription([car, cam])

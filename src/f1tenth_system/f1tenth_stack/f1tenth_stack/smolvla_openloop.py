@@ -91,7 +91,7 @@ class SmolVLAOpenLoop(Node):
             self._on_img,
             qos_profile_sensor_data,
         )
-        self.create_subscription(String, "/smolvla/task", self._on_task, 10)
+        self.create_subscription(String, "/task", self._on_task, 10)
         self.pub_act = self.create_publisher(Float32MultiArray, "/smolvla/action", 10)
         self.pub_dt = self.create_publisher(Float32, "/smolvla/infer_dt", 10)
 

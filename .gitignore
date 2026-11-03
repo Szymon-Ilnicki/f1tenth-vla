@@ -6,11 +6,7 @@ log/
 *.sh
 *.save
 outputs/
-<<<<<<< Updated upstream
 bags/*
 data/
-=======
 bags/ep*
 models/
-
->>>>>>> Stashed changes

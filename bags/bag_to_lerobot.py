@@ -7,16 +7,15 @@ from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
 from sensor_msgs.msg import Image
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-BAGS = [
-    Path(__file__).resolve().parent / "ep000",
-    Path(__file__).resolve().parent / "ep001",
-    Path(__file__).resolve().parent / "ep002",
-]
-OUT = Path(__file__).resolve().parent / "outputs/fwd_v0"
-TASK = "drive forward"
+
+# Point this at the folder that contains your ep* bags
+BAGS_DIR = Path(__file__).resolve().parent / "fwd_v1"
+OUT = Path(__file__).resolve().parent / "output"
+TASK = "drive forward slowly"
 IMG_TOPIC = "/camera/camera/color/image_raw"
-CMD_TOPIC = "/ackermann_cmd"
+CMD_TOPIC = "/teleop"
 FPS = 10
+
 
 def open_bag(path):
     r = SequentialReader()
@@ -57,9 +56,11 @@ def iter_synced(bag_dir):
 
 
 def main():
-    bags = BAGS
+    bags = sorted(BAGS_DIR.glob("ep*"))
     if not bags:
-        raise SystemExit(f"no bags in {BAGS}")
+        raise SystemExit(f"no ep* bags found in {BAGS_DIR}")
+
+    print(f"found {len(bags)} bags in {BAGS_DIR}")
 
     ds = LeRobotDataset.create(
         repo_id="local/fwd_v1",
@@ -70,6 +71,11 @@ def main():
                 "dtype": "video",
                 "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
+            },
+            "observation.state": {
+            "dtype": "float32",
+            "shape": (1,),
+            "names": ["zeroes"],
             },
             "action": {"dtype": "float32", "shape": (2,), "names": ["speed", "steering"]},
         },
@@ -89,20 +95,19 @@ def main():
             if t - last_keep < 1.0 / FPS - 1e-3:
                 continue
             last_keep = t
-            ds.add_frame(
-                {
-                    "observation.images.camera1": img,
-                    "action": act,
-                    "task": TASK,
-                }
-            )
+            ds.add_frame({
+                "observation.images.camera1": img,
+                "observation.state": np.zeros(1, dtype=np.float32),
+                "action": act,
+                "task": TASK,
+            })
             n += 1
         if n == 0:
             print("  skipped (no synced frames — check CMD_TOPIC)")
             continue
         ds.save_episode()
         print("  frames", n)
-
+    ds.finalize()
     print("wrote", OUT)
 
 

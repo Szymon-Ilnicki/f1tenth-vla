@@ -10,3 +10,4 @@ bags/*
 data/
 bags/ep*
 models/
+.vscode/

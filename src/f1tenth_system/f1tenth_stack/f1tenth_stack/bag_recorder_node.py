@@ -8,12 +8,13 @@ import signal
 from datetime import datetime
 
 # ==================== CONFIG (edit these) ====================
-BAG_DIR = "/home/hwf1tenth/bags"
+BAG_DIR = "/home/hwf1tenth/bags/track_v0"
 BAG_PREFIX = "ep"
 TOPICS = [
     "/camera/camera/color/image_raw",
     "/teleop",
     "/task",
+    "/odom"
 ]
 START_BUTTON = 1
 STOP_BUTTON  = 2

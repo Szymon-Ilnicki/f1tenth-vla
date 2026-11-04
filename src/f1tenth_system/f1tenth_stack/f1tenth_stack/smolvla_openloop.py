@@ -63,16 +63,25 @@ class SmolVLAOpenLoop(Node):
             "model_path", "outputs/smoke/checkpoints/last/pretrained_model"
         )
 
-        model_dir = resolve_model_dir(self.get_parameter("model_path").value)
-
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.get_logger().info(f"loading smolvla on {self.device}")
-        self.policy = (
-            SmolVLAPolicy.from_pretrained(str(model_dir))
-            .to(self.device)
-            .eval()
-        )
-        self.get_logger().info(f"loaded {model_dir}")
+        model_path = self.get_parameter("model_path").value
+        if model_path and model_path.strip():
+            model_dir = resolve_model_dir(model_path)
+            self.get_logger().info(f"loading smolvla from {model_dir} on {self.device}")
+            self.policy = (
+                SmolVLAPolicy.from_pretrained(str(model_dir))
+                .to(self.device)
+                .eval()
+            )
+            self.get_logger().info(f"loaded {model_dir}")
+        else:
+            self.get_logger().info(f"loading base smolvla on {self.device}")
+            self.policy = (
+                SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
+                .to(self.device)
+                .eval()
+            )
+            self.get_logger().info("loaded lerobot/smolvla_base")
 
         # Config values (overridden by launch/config)
         self.n_action_steps = int(self.get_parameter("n_action_steps").value)

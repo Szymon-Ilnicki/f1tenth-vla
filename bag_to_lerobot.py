@@ -9,13 +9,13 @@ from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Point this at the folder that contains your ep* bags
-BAGS_DIR = Path(__file__).resolve().parent / "fwd_v1"
-OUT = Path(__file__).resolve().parent / "output"
+BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v0"
+OUT = Path(__file__).resolve().parent / "lerobot_output/track_v0"
 TASK = "drive forward slowly"
 IMG_TOPIC = "/camera/camera/color/image_raw"
 CMD_TOPIC = "/teleop"
 FPS = 10
-
+REPO_ID = "local/track_v0"
 
 def open_bag(path):
     r = SequentialReader()
@@ -63,7 +63,7 @@ def main():
     print(f"found {len(bags)} bags in {BAGS_DIR}")
 
     ds = LeRobotDataset.create(
-        repo_id="local/fwd_v1",
+        repo_id=REPO_ID,
         fps=FPS,
         robot_type="f1tenth",
         features={

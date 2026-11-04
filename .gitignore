@@ -3,11 +3,9 @@ install/
 log/
 *.data
 *.posegraph
-*.sh
 *.save
 outputs/
-bags/*
 data/
-bags/ep*
 models/
 .vscode/
+bags/

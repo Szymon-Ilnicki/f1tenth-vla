@@ -160,37 +160,37 @@ class SmolVLAOpenLoop(Node):
         self.latest = msg
 
     def _run_inference(self):
-    if self.latest is None:
-        return None, 0.0
-    try:
-        img = image_msg_to_nchw(self.latest).to(self.device)
-    except Exception as e:
-        self.get_logger().error(str(e))
-        return None, 0.0
+        if self.latest is None:
+            return None, 0.0
+        try:
+            img = image_msg_to_nchw(self.latest).to(self.device)
+        except Exception as e:
+            self.get_logger().error(str(e))
+            return None, 0.0
 
-    state = torch.zeros(1, 6, device=self.device)
-    batch = {
-        "observation.state": state,
-        "observation.language.tokens": self.lang_tokens,
-        "observation.language.attention_mask": self.lang_mask,
-    }
-    for k in self.img_keys:
-        batch[k] = img
+        state = torch.zeros(1, 6, device=self.device)
+        batch = {
+            "observation.state": state,
+            "observation.language.tokens": self.lang_tokens,
+            "observation.language.attention_mask": self.lang_mask,
+        }
+        for k in self.img_keys:
+            batch[k] = img
 
-    led_on()
-    try:
-        t0 = time.perf_counter()
-        with torch.no_grad():
-            actions = []
-            for _ in range(self.n_action_steps):
-                out = self.policy.select_action(batch)
-                actions.append(out.detach().float().cpu().flatten().tolist())
-        if self.device == "cuda":
-            torch.cuda.synchronize()
-        dt = time.perf_counter() - t0
-    finally:
-        led_off()
-    return actions, dt
+        led_on()
+        try:
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                actions = []
+                for _ in range(self.n_action_steps):
+                    out = self.policy.select_action(batch)
+                    actions.append(out.detach().float().cpu().flatten().tolist())
+            if self.device == "cuda":
+                torch.cuda.synchronize()
+            dt = time.perf_counter() - t0
+        finally:
+            led_off()
+        return actions, dt
 
     def _tick(self):
         # Publish next action from the queue if available

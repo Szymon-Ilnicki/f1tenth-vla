@@ -31,7 +31,7 @@ def _pwm_write(path, value):
         pass
 
 def led_on():
-    _pwm_write(f"{PWM_BASE}/duty_cycle", 500000)  # 50 %
+    _pwm_write(f"{PWM_BASE}/duty_cycle", 1000000)  # 100 %
     _pwm_write(f"{PWM_BASE}/enable", 1)
 
 def led_off():

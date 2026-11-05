@@ -184,6 +184,9 @@ class SmolVLAOpenLoop(Node):
                 actions = []
                 for _ in range(self.n_action_steps):
                     out = self.policy.select_action(batch)
+                    # temporary patch: force positive speed
+                    if out[0, 0] < 0:
+                    out[0, 0] = -out[0, 0]
                     actions.append(out.detach().float().cpu().flatten().tolist())
             if self.device == "cuda":
                 torch.cuda.synchronize()

@@ -12,11 +12,30 @@ import torch
 from transformers import AutoTokenizer
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from pathlib import Path
+import subprocess
 
+PWM_BASE = "/sys/class/pwm/pwmchip2/pwm0"
 # Measured average inference time. Not in the config on purpose.
 INFERENCE_TIME = 1.2
 
+def _pwm_write(path, value):
+    try:
+        subprocess.run(
+            ["sudo", "tee", path],
+            input=str(value).encode(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:
+        pass
 
+def led_on():
+    _pwm_write(f"{PWM_BASE}/duty_cycle", 500000)  # 50 %
+    _pwm_write(f"{PWM_BASE}/enable", 1)
+
+def led_off():
+    _pwm_write(f"{PWM_BASE}/enable", 0)
 def resolve_model_dir(model_path: str) -> Path:
     p = Path(model_path).expanduser()
     if p.is_absolute() and p.is_dir():
@@ -141,28 +160,27 @@ class SmolVLAOpenLoop(Node):
         self.latest = msg
 
     def _run_inference(self):
-        if self.latest is None:
-            return None, 0.0
-        try:
-            img = image_msg_to_nchw(self.latest).to(self.device)
-        except Exception as e:
-            self.get_logger().error(str(e))
-            return None, 0.0
+    if self.latest is None:
+        return None, 0.0
+    try:
+        img = image_msg_to_nchw(self.latest).to(self.device)
+    except Exception as e:
+        self.get_logger().error(str(e))
+        return None, 0.0
 
-        state = torch.zeros(1, 6, device=self.device)
-        batch = {
-            "observation.state": state,
-            "observation.language.tokens": self.lang_tokens,
-            "observation.language.attention_mask": self.lang_mask,
-        }
-        for k in self.img_keys:
-            batch[k] = img
+    state = torch.zeros(1, 6, device=self.device)
+    batch = {
+        "observation.state": state,
+        "observation.language.tokens": self.lang_tokens,
+        "observation.language.attention_mask": self.lang_mask,
+    }
+    for k in self.img_keys:
+        batch[k] = img
 
+    led_on()
+    try:
         t0 = time.perf_counter()
         with torch.no_grad():
-            # select_action returns one action and manages its own queue internally.
-            # For early trigger we still call it; the local queue is filled from repeated calls
-            # or from a single chunk if the policy exposes it. Here we collect n_action_steps.
             actions = []
             for _ in range(self.n_action_steps):
                 out = self.policy.select_action(batch)
@@ -170,7 +188,9 @@ class SmolVLAOpenLoop(Node):
         if self.device == "cuda":
             torch.cuda.synchronize()
         dt = time.perf_counter() - t0
-        return actions, dt
+    finally:
+        led_off()
+    return actions, dt
 
     def _tick(self):
         # Publish next action from the queue if available

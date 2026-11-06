@@ -8,14 +8,15 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from sensor_msgs.msg import Imu
 
-# Point this at the folder that contains your ep* bags
-BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v0"
-OUT = Path(__file__).resolve().parent / "lerobot_output/track_v0_odom-state"
+BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v1"
+OUT = Path(__file__).resolve().parent / "lerobot_output/track_v1"
 TASK = "complete laps around the track"
 IMG_TOPIC = "/camera/camera/color/image_raw"
 CMD_TOPIC = "/teleop"
 ODOM_TOPIC = "/odom"
+IMU_TOPIC = "/sensors/imu/raw"
 FPS = 10
 REPO_ID = "local/track_v0"
 
@@ -45,28 +46,25 @@ def cmd_vec(msg):
     return np.array([speed, d.steering_angle], dtype=np.float32)
 
 
-def odom_vec(msg: Odometry):
-    # linear.x = forward speed, angular.z = yaw rate
-    return np.array([
-        msg.twist.twist.linear.x,
-        msg.twist.twist.angular.z,
-    ], dtype=np.float32)
-
-
 def iter_synced(bag_dir):
     reader = open_bag(bag_dir)
     types = {c.name: get_message(c.type) for c in reader.get_all_topics_and_types()}
     last_cmd = None
-    last_odom = np.zeros(2, dtype=np.float32)
+    last_linear_x = 0.0
+    last_angular_z = 0.0
     while reader.has_next():
         topic, data, t = reader.read_next()
         msg = deserialize_message(data, types[topic])
         if topic == CMD_TOPIC:
             last_cmd = cmd_vec(msg)
         elif topic == ODOM_TOPIC:
-            last_odom = odom_vec(msg)
+            last_linear_x = float(msg.twist.twist.linear.x)
+        elif topic == IMU_TOPIC:
+            last_angular_z = float(msg.angular_velocity.z)
         elif topic == IMG_TOPIC and last_cmd is not None:
-            yield t * 1e-9, img_np(msg), last_cmd, last_odom
+            state = np.array([last_linear_x, last_angular_z], dtype=np.float32)
+            yield t * 1e-9, img_np(msg), last_cmd, state
+
 def verify(dataset_root: Path):
     import pandas as pd
     import json

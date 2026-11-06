@@ -8,13 +8,14 @@ import signal
 from datetime import datetime
 
 # ==================== CONFIG (edit these) ====================
-BAG_DIR = "/home/hwf1tenth/bags/track_v0"
+BAG_DIR = "/home/hwf1tenth/bags/track_v1"
 BAG_PREFIX = "ep"
-TOPICS = [
-    "/camera/camera/color/image_raw",
-    "/teleop",
-    "/task",
-    "/odom"
+TOPICS = [# empty will record all by appending "-a" to the command
+#    "/camera/camera/color/image_raw",
+#    "/teleop",
+#    "/task",
+#    "/odom.twist.twist.linear.x",
+#   "/sensors/imu/raw.angular_velocity.z",
 ]
 START_BUTTON = 1
 STOP_BUTTON  = 2

@@ -1,6 +1,4 @@
 #!/bin/bash
-# save as ~/rosbags_launch.sh
-# chmod +x ~/rosbags_launch.sh
 
 # === CONFIG ===
 ROS_SETUP="/opt/ros/humble/setup.bash"
@@ -23,7 +21,7 @@ echo "Camera stack PID: $LAUNCH_PID"
 
 # Give the launch a moment
 sleep 3
-ros2 topic pub --once /task_in std_msgs/msg/String "{data: 'drive forward slowly'}"
+ros2 topic pub --once /task_in std_msgs/msg/String "{data: 'complete laps around track'}"
 
 echo "Starting bag recorder..."
 python3 "$BAG_RECORDER" &

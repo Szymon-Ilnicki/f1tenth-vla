@@ -59,6 +59,8 @@ def iter_synced(bag_dir):
     last_angular_z = 0.0
     while reader.has_next():
         topic, data, t = reader.read_next()
+        if topic not in types:          # skip unwanted topics
+            continue
         msg = deserialize_message(data, types[topic])
         if topic == CMD_TOPIC:
             last_cmd = cmd_vec(msg)

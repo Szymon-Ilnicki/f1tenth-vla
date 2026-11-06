@@ -5,15 +5,17 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
 from sensor_msgs.msg import Image
+from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Point this at the folder that contains your ep* bags
 BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v0"
 OUT = Path(__file__).resolve().parent / "lerobot_output/track_v0"
-TASK = "drive forward slowly"
+TASK = "complete laps around the track"
 IMG_TOPIC = "/camera/camera/color/image_raw"
 CMD_TOPIC = "/teleop"
+ODOM_TOPIC = "/odom"
 FPS = 10
 REPO_ID = "local/track_v0"
 
@@ -39,20 +41,32 @@ def img_np(msg: Image):
 
 def cmd_vec(msg):
     d = msg.drive if hasattr(msg, "drive") else msg
-    return np.array([d.speed, d.steering_angle], dtype=np.float32)
+    speed = float(d.speed)
+    return np.array([speed, d.steering_angle], dtype=np.float32)
+
+
+def odom_vec(msg: Odometry):
+    # linear.x = forward speed, angular.z = yaw rate
+    return np.array([
+        msg.twist.twist.linear.x,
+        msg.twist.twist.angular.z,
+    ], dtype=np.float32)
 
 
 def iter_synced(bag_dir):
     reader = open_bag(bag_dir)
     types = {c.name: get_message(c.type) for c in reader.get_all_topics_and_types()}
     last_cmd = None
+    last_odom = np.zeros(2, dtype=np.float32)
     while reader.has_next():
         topic, data, t = reader.read_next()
         msg = deserialize_message(data, types[topic])
         if topic == CMD_TOPIC:
             last_cmd = cmd_vec(msg)
+        elif topic == ODOM_TOPIC:
+            last_odom = odom_vec(msg)
         elif topic == IMG_TOPIC and last_cmd is not None:
-            yield t * 1e-9, img_np(msg), last_cmd
+            yield t * 1e-9, img_np(msg), last_cmd, last_odom
 
 
 def main():
@@ -73,9 +87,9 @@ def main():
                 "names": ["height", "width", "channels"],
             },
             "observation.state": {
-            "dtype": "float32",
-            "shape": (1,),
-            "names": ["zeroes"],
+                "dtype": "float32",
+                "shape": (2,),
+                "names": ["linear_x", "angular_z"],
             },
             "action": {"dtype": "float32", "shape": (2,), "names": ["speed", "steering"]},
         },
@@ -88,7 +102,7 @@ def main():
         n = 0
         t0 = None
         last_keep = None
-        for t, img, act in iter_synced(bag):
+        for t, img, act, odom in iter_synced(bag):
             if t0 is None:
                 t0 = t
                 last_keep = t - 1
@@ -97,13 +111,13 @@ def main():
             last_keep = t
             ds.add_frame({
                 "observation.images.camera1": img,
-                "observation.state": np.zeros(1, dtype=np.float32),
+                "observation.state": odom,
                 "action": act,
                 "task": TASK,
             })
             n += 1
         if n == 0:
-            print("  skipped (no synced frames — check CMD_TOPIC)")
+            print("  skipped (no synced frames — check topics)")
             continue
         ds.save_episode()
         print("  frames", n)

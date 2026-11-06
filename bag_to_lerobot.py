@@ -48,7 +48,12 @@ def cmd_vec(msg):
 
 def iter_synced(bag_dir):
     reader = open_bag(bag_dir)
-    types = {c.name: get_message(c.type) for c in reader.get_all_topics_and_types()}
+    wanted = {IMG_TOPIC, CMD_TOPIC, ODOM_TOPIC, IMU_TOPIC}
+    types = {
+        c.name: get_message(c.type)
+        for c in reader.get_all_topics_and_types()
+        if c.name in wanted
+    }
     last_cmd = None
     last_linear_x = 0.0
     last_angular_z = 0.0

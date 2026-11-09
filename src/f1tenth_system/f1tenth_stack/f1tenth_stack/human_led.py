@@ -2,6 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Bool
 import subprocess
 
 PWM_CHIP = 2
@@ -16,6 +17,7 @@ class HumanLED(Node):
         self.last_joy = None
         self.setup_led()
         self.create_subscription(Joy, "/joy", self.cb, 10)
+        self.pub = self.create_publisher(Bool, "/human_control", 10)
         self.create_timer(0.1, self.tick)            # 10 Hz
         self.set_led(True)
 
@@ -36,6 +38,9 @@ class HumanLED(Node):
         if self.last_joy and len(self.last_joy.buttons) > self.btn:
             human = self.last_joy.buttons[self.btn] == 1
         self.set_led(not human)
+        msg = Bool()
+        msg.data = human
+        self.pub.publish(msg)
 
 def main():
     rclpy.init()

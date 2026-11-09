@@ -30,6 +30,7 @@ setup(
 	        'smolvla_openloop = f1tenth_stack.smolvla_openloop:main',
             'pid_controller = f1tenth_stack.pid_controller:main',
             'task_latch.py = f1tenth_stack.task_latch:main',
+            'human_led = f1tenth_stack.human_led:main',
         ],
     },
 )

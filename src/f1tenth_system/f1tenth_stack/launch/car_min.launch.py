@@ -61,8 +61,12 @@ def generate_launch_description():
     name='pid_controller',
     parameters=[LaunchConfiguration('vesc_config')],
     ))
-
-
+    ld.add_action(Node(
+    package='f1tenth_stack',
+    executable='human_led',
+    name='human_led',
+    output='screen',
+    ))
     ld.add_action(Node(
         package='f1tenth_stack',
         executable='task_latch.py',

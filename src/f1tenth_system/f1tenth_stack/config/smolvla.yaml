@@ -2,9 +2,9 @@ smolvla_openloop:
   ros__parameters:
     policy_id: "lerobot/smolvla_base"
     device: "cuda"
-#    model_path: ""
-    model_path: "models/track_v0_no-state_smolvla"
-    task: "drive forward slowly"
+#    model_path: "" #blank for base SmolVLA
+    model_path: "models/track_v1"
+    task: "complete laps around track"
     image_topic: "/camera/camera/color/image_raw"
     rate_hz: 2.0
     n_action_steps: 2

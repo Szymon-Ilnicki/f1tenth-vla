@@ -8,7 +8,7 @@ from std_msgs.msg import String
 class TaskLatch(Node):
     def __init__(self):
         super().__init__('task_latch')
-        self.task = "blank task"   # default until overriden
+        self.task = "complete laps around track"   # default until overriden
         self.sub = self.create_subscription(
             String, '/task_in', self.cb, 10)
         self.pub = self.create_publisher(String, '/task', 10)

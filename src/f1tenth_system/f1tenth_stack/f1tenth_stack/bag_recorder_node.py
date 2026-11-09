@@ -38,13 +38,13 @@ class BagRecorder(Node):
 
     def setup_led(self):
         try:
-            subprocess.run(f"echo {PWM_CHANNEL} | sudo tee /sys/class/pwm/pwmchip{PWM_CHIP}/export",
+            subprocess.run(f"echo {PWM_CHANNEL} |  tee /sys/class/pwm/pwmchip{PWM_CHIP}/export",
                            shell=True, check=False)
-            subprocess.run(f"echo 1000000 | sudo tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/period",
+            subprocess.run(f"echo 1000000 |  tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/period",
                            shell=True, check=False)
-            subprocess.run(f"echo 0 | sudo tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/duty_cycle",
+            subprocess.run(f"echo 0 |  tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/duty_cycle",
                            shell=True, check=False)
-            subprocess.run(f"echo 1 | sudo tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/enable",
+            subprocess.run(f"echo 1 |  tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/enable",
                            shell=True, check=False)
         except Exception as e:
             self.get_logger().warn(f"LED setup failed: {e}")
@@ -52,7 +52,7 @@ class BagRecorder(Node):
     def set_led(self, on: bool):
         duty = 1000000 if on else 0
         subprocess.run(
-            f"echo {duty} | sudo tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/duty_cycle",
+            f"echo {duty} |  tee /sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}/duty_cycle",
             shell=True, check=False
         )
 

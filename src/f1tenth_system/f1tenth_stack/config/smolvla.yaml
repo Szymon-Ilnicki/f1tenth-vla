@@ -2,12 +2,13 @@ smolvla_openloop:
   ros__parameters:
     policy_id: "lerobot/smolvla_base"
     device: "cuda"
-#    model_path: "" #blank for base SmolVLA
-    model_path: "models/track_v1"
+
+    #model_path: "" #blank for SmolVLA base model
+    model_path: "models/track_v0_odom-state"
     task: "complete laps around track"
     image_topic: "/camera/camera/color/image_raw"
     rate_hz: 2.0
-    n_action_steps: 2
+    n_action_steps: 3
     #max_speed: 0.5
     #max_steer: 0.35
 

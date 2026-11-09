@@ -4,8 +4,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 import subprocess
 
-PWM_CHIP = 3
-PWM_CHANNEL = 1
+PWM_CHIP = 2
+PWM_CHANNEL = 0
 
 class HumanLED(Node):
     def __init__(self):

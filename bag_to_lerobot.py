@@ -9,8 +9,8 @@ from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 import cv2
 
-BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v1"
-OUT = Path(__file__).resolve().parent / "lerobot_output/track_v1_dual-image"
+BAGS_DIR = Path(__file__).resolve().parent / "bags/track_v2"
+OUT = Path(__file__).resolve().parent / "lerobot_output/track_v2_dual-image"
 TASK = "complete laps around the track"
 IMG_TOPIC = "/camera/camera/color/image_raw"
 DEPTH_TOPIC = "/camera/camera/depth/image_rect_raw"

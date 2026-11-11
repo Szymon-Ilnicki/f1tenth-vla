@@ -107,12 +107,12 @@ def main():
         features={
             "observation.images.camera1": {
                 "dtype": "video",
-                "shape": (480, 640, 3),
+                "shape": (240, 424, 3),
                 "names": ["height", "width", "channels"],
             },
             "observation.images.camera2": {
                 "dtype": "video",
-                "shape": (480, 640, 3),
+                "shape": (240, 424, 3),
                 "names": ["height", "width", "channels"],
             },
             "action": {"dtype": "float32", "shape": (2,), "names": ["speed", "steering"]},

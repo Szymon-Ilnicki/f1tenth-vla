@@ -48,24 +48,31 @@ def resolve_model_dir(model_path: str) -> Path:
 
 def image_msg_to_nchw(msg: Image) -> torch.Tensor:
     h, w = msg.height, msg.width
-    arr = np.frombuffer(msg.data, dtype=np.uint8)
+
     if msg.encoding in ("rgb8", "bgr8"):
+        arr = np.frombuffer(msg.data, dtype=np.uint8)
         img = arr.reshape(h, w, 3)
         if msg.encoding == "bgr8":
             img = img[:, :, ::-1]
     elif msg.encoding in ("16UC1", "mono16"):
-        # depth → 3-channel by repeating
+        arr = np.frombuffer(msg.data, dtype=np.uint16)
         img = arr.reshape(h, w)
+        # Normalize to 0–255 and expand to 3 channels
+        if img.max() > 0:
+            img = (img.astype(np.float32) / img.max() * 255).astype(np.uint8)
+        else:
+            img = img.astype(np.uint8)
         img = np.stack([img, img, img], axis=-1)
-        img = (img / img.max() * 255).astype(np.uint8) if img.max() > 0 else img.astype(np.uint8)
     else:
         raise RuntimeError(f"unsupported encoding {msg.encoding}")
+
+    # Resize to 224×224 with nearest-neighbor sampling
     ys = (np.linspace(0, h - 1, 224)).astype(np.int32)
     xs = (np.linspace(0, w - 1, 224)).astype(np.int32)
     img = img[ys][:, xs]
+
     t = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
     return t.unsqueeze(0)
-
 class SmolVLAOpenLoop(Node):
     def __init__(self):
         super().__init__("smolvla_openloop")

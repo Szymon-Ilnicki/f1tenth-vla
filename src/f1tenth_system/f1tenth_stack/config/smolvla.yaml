@@ -3,8 +3,8 @@ smolvla_openloop:
     policy_id: "lerobot/smolvla_base"
     device: "cuda"
     #model_path: "" #blank for SmolVLA base model
-    model_path: "models/track_v0_odom-state"
-    mode: rgb # rgb | depth | dual
+    model_path: "models/track_v2_dual-image"
+    mode: dual # rgb | depth | dual
     task: "complete laps around track"
     image_topic: "/camera/camera/color/image_raw"
     rate_hz: 2.0

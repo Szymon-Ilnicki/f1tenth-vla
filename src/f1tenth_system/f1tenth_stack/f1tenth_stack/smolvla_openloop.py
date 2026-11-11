@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import time
-
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -13,6 +13,9 @@ from transformers import AutoTokenizer
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from pathlib import Path
 import subprocess
+
+DEPTH_MIN = 200
+DEPTH_MAX = 2000
 
 PWM_BASE = "/sys/class/pwm/pwmchip2/pwm0"
 INFERENCE_TIME = 1.2
@@ -56,17 +59,22 @@ def image_msg_to_nchw(msg: Image) -> torch.Tensor:
             img = img[:, :, ::-1]
     elif msg.encoding in ("16UC1", "mono16"):
         arr = np.frombuffer(msg.data, dtype=np.uint16)
-        img = arr.reshape(h, w)
-        # Normalize to 0–255 and expand to 3 channels
-        if img.max() > 0:
-            img = (img.astype(np.float32) / img.max() * 255).astype(np.uint8)
-        else:
-            img = img.astype(np.uint8)
-        img = np.stack([img, img, img], axis=-1)
+        depth = arr.reshape(h, w)
+
+        invalid = (depth == 0)
+        depth_f = depth.astype(np.float32)
+        depth_f = np.clip(depth_f, DEPTH_MIN, DEPTH_MAX)
+        norm = (depth_f - DEPTH_MIN) / (DEPTH_MAX - DEPTH_MIN)
+        norm = (norm * 255).astype(np.uint8)
+
+        color = cv2.applyColorMap(norm, cv2.COLORMAP_TURBO)
+        color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        color[invalid] = [255, 0, 255]   # bright magenta
+        img = color
     else:
         raise RuntimeError(f"unsupported encoding {msg.encoding}")
 
-    # Resize to 224×224 with nearest-neighbor sampling
+    # Resize to 224×224 nearest-neighbor
     ys = (np.linspace(0, h - 1, 224)).astype(np.int32)
     xs = (np.linspace(0, w - 1, 224)).astype(np.int32)
     img = img[ys][:, xs]

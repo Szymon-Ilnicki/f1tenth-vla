@@ -74,12 +74,8 @@ def image_msg_to_nchw(msg: Image) -> torch.Tensor:
     else:
         raise RuntimeError(f"unsupported encoding {msg.encoding}")
 
-    # Resize to 224×224 nearest-neighbor
-    ys = (np.linspace(0, h - 1, 224)).astype(np.int32)
-    xs = (np.linspace(0, w - 1, 224)).astype(np.int32)
-    img = img[ys][:, xs]
-
-    t = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+    # Full frame, as in the LeRobot dataset; the policy letterboxes it to 512x512 itself.
+    t = torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1).float() / 255.0
     return t.unsqueeze(0)
 class SmolVLAOpenLoop(Node):
     def __init__(self):
@@ -103,6 +99,7 @@ class SmolVLAOpenLoop(Node):
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         model_path = self.get_parameter("model_path").value
+        model_dir = None
         if model_path and model_path.strip():
             model_dir = resolve_model_dir(model_path)
             self.get_logger().info(f"loading smolvla from {model_dir} on {self.device}")
@@ -112,6 +109,10 @@ class SmolVLAOpenLoop(Node):
             self.get_logger().info(f"loading base smolvla on {self.device}")
             self.policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base").to(self.device).eval()
             self.get_logger().info("loaded lerobot/smolvla_base")
+
+        self.declare_parameter("stats_path", "")  # dataset meta/stats.json, if the postprocessor won't load
+        self.act_mean, self.act_std = self._load_action_stats(
+            model_dir, self.get_parameter("stats_path").value)
 
         self.n_action_steps = int(self.get_parameter("n_action_steps").value)
         self.n_action_steps = max(1, min(self.n_action_steps, int(self.policy.config.chunk_size)))
@@ -159,6 +160,34 @@ class SmolVLAOpenLoop(Node):
         self.create_timer(period, self._tick)
         self.get_logger().info(f"image keys {self.img_keys}")
 
+    def _load_action_stats(self, model_dir, stats_path):
+        """The policy outputs mean/std-normalised actions; recover speed = raw*std + mean.
+        Normally the checkpoint's postprocessor holds these stats."""
+        try:
+            if stats_path:
+                import json
+                s = json.loads(Path(stats_path).expanduser().read_text())["action"]
+                mean = np.asarray(s["mean"], dtype=np.float32)
+                std = np.asarray(s["std"], dtype=np.float32)
+            else:
+                from lerobot.policies.factory import make_pre_post_processors
+                _, post = make_pre_post_processors(
+                    self.policy.config,
+                    pretrained_path=str(model_dir) if model_dir else "lerobot/smolvla_base",
+                )
+                m = torch.as_tensor(post(torch.zeros(1, 2))).float().cpu().numpy().reshape(-1)
+                o = torch.as_tensor(post(torch.ones(1, 2))).float().cpu().numpy().reshape(-1)
+                mean, std = m, o - m
+            self.get_logger().info(
+                f"action un-normalisation: speed = raw*{std[0]:.4f} + {mean[0]:.4f}, "
+                f"steering = raw*{std[1]:.4f} + {mean[1]:.4f}")
+            return mean[:2], std[:2]
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().error(
+                f"could not load action stats ({e}); publishing RAW normalised actions. "
+                "Set the stats_path parameter to <dataset>/meta/stats.json to fix.")
+            return np.zeros(2, np.float32), np.ones(2, np.float32)
+
     def _set_task(self, text: str):
         text = (text or "drive forward").strip() + "\n"
         enc = self.tok(text, return_tensors="pt", padding="max_length", max_length=48)
@@ -176,7 +205,7 @@ class SmolVLAOpenLoop(Node):
         self.latest_depth = msg
 
     def _zeros(self):
-        return torch.zeros(1, 3, 224, 224, device=self.device)
+        return torch.zeros(1, 3, 240, 424, device=self.device)
 
     def _run_inference(self):
         # Build the two image tensors according to mode
@@ -219,9 +248,9 @@ class SmolVLAOpenLoop(Node):
                 actions = []
                 for _ in range(self.n_action_steps):
                     out = self.policy.select_action(batch)
-                    if out[0, 0] < 0:
-                        out[0, 0] = -out[0, 0]
-                    actions.append(out.detach().float().cpu().flatten().tolist())
+                    raw = out.detach().float().cpu().numpy().reshape(-1)[:2]
+                    act = raw * self.act_std + self.act_mean   # back to setpoint units
+                    actions.append([float(v) for v in act])    # clamping is done in smolvla_to_drive
             if self.device == "cuda":
                 torch.cuda.synchronize()
             dt = time.perf_counter() - t0

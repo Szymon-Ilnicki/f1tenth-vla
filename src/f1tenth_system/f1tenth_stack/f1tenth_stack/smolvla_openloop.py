@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""SmolVLA driving node.
+
+Timing: the model was trained on a 10 fps dataset, so each action in a chunk covers
+1/rate_hz = 0.1 s. Inference runs continuously in a background thread; the timer
+publishes one action every 0.1 s from the most recent chunk, choosing the action
+planned for the current moment: index = (now - time the images were taken) * rate_hz.
+So the actions that fell due while the model was running are skipped, and every
+action is executed at the moment it was planned for.
+"""
+import threading
 import time
 import cv2
 import numpy as np
@@ -18,7 +28,6 @@ DEPTH_MIN = 200
 DEPTH_MAX = 2000
 
 PWM_BASE = "/sys/class/pwm/pwmchip2/pwm0"
-INFERENCE_TIME = 1.2
 
 def _pwm_write(path, value):
     try:
@@ -84,8 +93,9 @@ class SmolVLAOpenLoop(Node):
         self.declare_parameter("rgb_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("depth_topic", "/camera/camera/depth/image_rect_raw")
         self.declare_parameter("task", "drive forward")
-        self.declare_parameter("rate_hz", 2.0)
-        self.declare_parameter("n_action_steps", 10)
+        self.declare_parameter("rate_hz", 10.0)        # must equal the dataset fps
+        self.declare_parameter("n_action_steps", 30)   # max actions used from one chunk
+        self.declare_parameter("stop_when_empty", True)
         self.declare_parameter("mode", "rgb")  # rgb | depth | dual
         self.declare_parameter(
             "model_path", "outputs/smoke/checkpoints/last/pretrained_model"
@@ -114,20 +124,20 @@ class SmolVLAOpenLoop(Node):
         self.act_mean, self.act_std = self._load_action_stats(
             model_dir, self.get_parameter("stats_path").value)
 
+        self.chunk_size = int(self.policy.config.chunk_size)
         self.n_action_steps = int(self.get_parameter("n_action_steps").value)
-        self.n_action_steps = max(1, min(self.n_action_steps, int(self.policy.config.chunk_size)))
-        self.policy.config.n_action_steps = self.n_action_steps
+        self.n_action_steps = max(1, min(self.n_action_steps, self.chunk_size))
+        # whole chunk per inference; we pick the time-aligned part of it ourselves
+        self.policy.config.n_action_steps = self.chunk_size
         self.policy.reset()
 
         self.rate_hz = float(self.get_parameter("rate_hz").value)
-        actions_to_cover = int(INFERENCE_TIME * self.rate_hz) + 1
-        self.trigger_at = max(1, min(actions_to_cover, self.n_action_steps - 1))
+        self.stop_when_empty = bool(self.get_parameter("stop_when_empty").value)
 
         self.get_logger().info(
             f"n_action_steps={self.n_action_steps} "
-            f"chunk_size={self.policy.config.chunk_size} "
-            f"rate_hz={self.rate_hz:.1f} "
-            f"trigger_at={self.trigger_at}"
+            f"chunk_size={self.chunk_size} "
+            f"rate_hz={self.rate_hz:.1f} (action spacing {1000 / self.rate_hz:.0f} ms)"
         )
 
         self.img_keys = list(self.policy.config.image_features)
@@ -139,8 +149,10 @@ class SmolVLAOpenLoop(Node):
 
         self.latest_rgb = None
         self.latest_depth = None
-        self.action_queue = []
-        self.inference_in_progress = False
+        self.plan = None                 # (chunk [N,2], monotonic time of its images)
+        self.plan_lock = threading.Lock()
+        self.running = True
+        self.warned_empty = False
 
         # Always subscribe to both; we just ignore what we don't need
         self.create_subscription(
@@ -159,6 +171,9 @@ class SmolVLAOpenLoop(Node):
         period = 1.0 / max(self.rate_hz, 0.2)
         self.create_timer(period, self._tick)
         self.get_logger().info(f"image keys {self.img_keys}")
+
+        self.infer_thread = threading.Thread(target=self._inference_loop, daemon=True)
+        self.infer_thread.start()
 
     def _load_action_stats(self, model_dir, stats_path):
         """The policy outputs mean/std-normalised actions; recover speed = raw*std + mean.
@@ -208,26 +223,31 @@ class SmolVLAOpenLoop(Node):
         return torch.zeros(1, 3, 240, 424, device=self.device)
 
     def _run_inference(self):
+        """One model run on the newest images. Returns (chunk [N,2] in setpoint units,
+        monotonic time the images were taken, inference seconds), or (None, None, 0)."""
+        rgb_msg, depth_msg = self.latest_rgb, self.latest_depth   # snapshot
+        obs_time = time.monotonic()
+
         # Build the two image tensors according to mode
         if self.mode in ("rgb", "dual"):
-            if self.latest_rgb is None:
-                return None, 0.0
+            if rgb_msg is None:
+                return None, None, 0.0
             try:
-                cam1 = image_msg_to_nchw(self.latest_rgb).to(self.device)
+                cam1 = image_msg_to_nchw(rgb_msg).to(self.device)
             except Exception as e:
                 self.get_logger().error(f"rgb convert: {e}")
-                return None, 0.0
+                return None, None, 0.0
         else:
             cam1 = self._zeros()
 
         if self.mode in ("depth", "dual"):
-            if self.latest_depth is None:
-                return None, 0.0
+            if depth_msg is None:
+                return None, None, 0.0
             try:
-                cam2 = image_msg_to_nchw(self.latest_depth).to(self.device)
+                cam2 = image_msg_to_nchw(depth_msg).to(self.device)
             except Exception as e:
                 self.get_logger().error(f"depth convert: {e}")
-                return None, 0.0
+                return None, None, 0.0
         else:
             cam2 = self._zeros()
 
@@ -245,37 +265,65 @@ class SmolVLAOpenLoop(Node):
         try:
             t0 = time.perf_counter()
             with torch.no_grad():
-                actions = []
-                for _ in range(self.n_action_steps):
-                    out = self.policy.select_action(batch)
-                    raw = out.detach().float().cpu().numpy().reshape(-1)[:2]
-                    act = raw * self.act_std + self.act_mean   # back to setpoint units
-                    actions.append([float(v) for v in act])    # clamping is done in smolvla_to_drive
-            if self.device == "cuda":
-                torch.cuda.synchronize()
+                if hasattr(self.policy, "predict_action_chunk"):
+                    out = self.policy.predict_action_chunk(batch)[0]          # [chunk, action_dim]
+                else:                                                         # older lerobot
+                    self.policy.reset()
+                    out = torch.stack([self.policy.select_action(batch)[0]
+                                       for _ in range(self.chunk_size)])
+                raw = out.detach().float().cpu().numpy()[:, :2]
             dt = time.perf_counter() - t0
         finally:
             led_off()
-        return actions, dt
+        chunk = raw * self.act_std + self.act_mean   # back to setpoint units; clamping is in smolvla_to_drive
+        return chunk, obs_time, dt
+
+    def _inference_loop(self):
+        """Background thread: run the model back to back, swap in each new chunk."""
+        while self.running and rclpy.ok():
+            try:
+                chunk, obs_time, dt = self._run_inference()
+            except Exception as e:  # noqa: BLE001
+                self.get_logger().error(f"inference failed: {e}")
+                time.sleep(0.5)
+                continue
+            if chunk is None:            # no images yet
+                time.sleep(0.05)
+                continue
+            with self.plan_lock:
+                self.plan = (chunk[:self.n_action_steps], obs_time)
+            age = time.monotonic() - obs_time
+            self.pub_dt.publish(Float32(data=float(dt)))
+            self.get_logger().info(
+                f"dt={dt:.3f}s new chunk, starting at action {int(round(age * self.rate_hz))}",
+                throttle_duration_sec=2.0)
+            if 2 * age * self.rate_hz > self.n_action_steps:
+                self.get_logger().warn(
+                    f"inference ({dt:.2f}s) too slow for n_action_steps={self.n_action_steps} at "
+                    f"{self.rate_hz:.0f} Hz; the queue can run dry -- raise n_action_steps",
+                    throttle_duration_sec=5.0)
 
     def _tick(self):
-        if self.action_queue:
-            vec = self.action_queue.pop(0)
-            act = Float32MultiArray()
-            act.data = vec
-            self.pub_act.publish(act)
-
-        if len(self.action_queue) <= self.trigger_at and not self.inference_in_progress:
-            self.inference_in_progress = True
-            actions, dt = self._run_inference()
-            self.inference_in_progress = False
-            if actions is not None:
-                self.action_queue.extend(actions)
-                self.pub_dt.publish(Float32(data=float(dt)))
-                self.get_logger().info(
-                    f"dt={dt:.3f}s queued {len(actions)} actions "
-                    f"(remaining={len(self.action_queue)})"
-                )
+        with self.plan_lock:
+            plan = self.plan
+        vec = None
+        if plan is not None:
+            chunk, obs_time = plan
+            i = int(round((time.monotonic() - obs_time) * self.rate_hz))
+            if 0 <= i < len(chunk):
+                vec = [float(v) for v in chunk[i]]
+        if vec is None:
+            if not self.stop_when_empty:
+                return
+            vec = [0.0, 0.0]             # no current plan: stop rather than hold the last command
+            if not self.warned_empty:
+                self.get_logger().warn("no current plan (startup, or inference stalled) -> publishing stop")
+                self.warned_empty = True
+        else:
+            self.warned_empty = False
+        act = Float32MultiArray()
+        act.data = vec
+        self.pub_act.publish(act)
 
 def main():
     rclpy.init()
@@ -283,6 +331,7 @@ def main():
     try:
         rclpy.spin(node)
     finally:
+        node.running = False
         node.destroy_node()
         rclpy.shutdown()
 

@@ -4,7 +4,7 @@
 Timing: the model was trained on a 10 fps dataset, so each action in a chunk covers
 1/rate_hz = 0.1 s. Inference runs continuously in a background thread; the timer
 publishes one action every 0.1 s from the most recent chunk, choosing the action
-planned for the current moment: index = (now - time the images were taken) * rate_hz.
+planned for the current moment: index = (now - time the images were taken + lead_s) * rate_hz.
 So the actions that fell due while the model was running are skipped, and every
 action is executed at the moment it was planned for.
 """
@@ -94,8 +94,10 @@ class SmolVLAOpenLoop(Node):
         self.declare_parameter("depth_topic", "/camera/camera/depth/image_rect_raw")
         self.declare_parameter("task", "drive forward")
         self.declare_parameter("rate_hz", 10.0)        # must equal the dataset fps
-        self.declare_parameter("n_action_steps", 30)   # max actions used from one chunk
+        self.declare_parameter("n_action_steps", 40)   # max actions used from one chunk
         self.declare_parameter("stop_when_empty", True)
+        self.declare_parameter("lead_s", 0.0)    # publish the action planned this far ahead (actuator lag)
+        self.declare_parameter("num_steps", 0)   # denoising steps per inference; 0 = checkpoint default
         self.declare_parameter("mode", "rgb")  # rgb | depth | dual
         self.declare_parameter(
             "model_path", "outputs/smoke/checkpoints/last/pretrained_model"
@@ -133,6 +135,15 @@ class SmolVLAOpenLoop(Node):
 
         self.rate_hz = float(self.get_parameter("rate_hz").value)
         self.stop_when_empty = bool(self.get_parameter("stop_when_empty").value)
+        self.lead_s = float(self.get_parameter("lead_s").value)
+
+        num_steps = int(self.get_parameter("num_steps").value)
+        if num_steps > 0:
+            self.policy.config.num_steps = num_steps
+            inner = getattr(getattr(self.policy, "model", None), "config", None)
+            if inner is not None:
+                inner.num_steps = num_steps
+        self.get_logger().info(f"denoising num_steps={self.policy.config.num_steps}, lead_s={self.lead_s:.2f}")
 
         self.get_logger().info(
             f"n_action_steps={self.n_action_steps} "
@@ -292,7 +303,7 @@ class SmolVLAOpenLoop(Node):
                 continue
             with self.plan_lock:
                 self.plan = (chunk[:self.n_action_steps], obs_time)
-            age = time.monotonic() - obs_time
+            age = time.monotonic() - obs_time + self.lead_s
             self.pub_dt.publish(Float32(data=float(dt)))
             self.get_logger().info(
                 f"dt={dt:.3f}s new chunk, starting at action {int(round(age * self.rate_hz))}",
@@ -309,7 +320,7 @@ class SmolVLAOpenLoop(Node):
         vec = None
         if plan is not None:
             chunk, obs_time = plan
-            i = int(round((time.monotonic() - obs_time) * self.rate_hz))
+            i = int(round((time.monotonic() - obs_time + self.lead_s) * self.rate_hz))
             if 0 <= i < len(chunk):
                 vec = [float(v) for v in chunk[i]]
         if vec is None:

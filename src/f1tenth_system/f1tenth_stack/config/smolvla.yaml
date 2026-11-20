@@ -12,7 +12,7 @@ smolvla_openloop:
     lead_s: 0.0          # extra look-ahead [s] on top of the measured inference delay, for actuator lag
     num_steps: 0         # denoising steps per inference; 0 = checkpoint default (10). Fewer = faster
     stats_path: "/home/hwf1tenth/szymon_ws/f1tenth-vla/models/track_v3_dual-image/dataset_stats.json"
-    #max_speed: 0.5
+    #max_speed: 1.2
     #max_steer: 0.35
 
 smolvla_to_drive:
@@ -20,6 +20,6 @@ smolvla_to_drive:
     action_topic: /smolvla/action
     drive_topic: /drive
     speed_min: 0.0
-    speed_max: 1.0
+    speed_max: 2.5
     steer_max: 0.4
     stale_s: 0.5

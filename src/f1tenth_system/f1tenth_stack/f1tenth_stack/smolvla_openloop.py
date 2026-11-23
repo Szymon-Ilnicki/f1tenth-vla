@@ -48,6 +48,34 @@ def led_on():
 def led_off():
     _pwm_write(f"{PWM_BASE}/enable", 0)
 
+def compat_model_dir(model_dir: Path, logger=None) -> Path:
+    """Checkpoints from a newer lerobot can carry config fields this lerobot doesn't know
+    (e.g. dtype, pretrained_revision, optimizer_fused), which makes from_pretrained fail.
+    If so, build a temporary copy of the folder (symlinks + a filtered config.json) and load
+    from that. The model folder itself is never modified."""
+    import dataclasses
+    import json
+    import tempfile
+    from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
+
+    cfg_path = model_dir / "config.json"
+    if not cfg_path.exists():
+        return model_dir
+    cfg = json.loads(cfg_path.read_text())
+    known = {f.name for f in dataclasses.fields(SmolVLAConfig)} | {"type"}
+    unknown = sorted(k for k in cfg if k not in known)
+    if not unknown:
+        return model_dir
+    tmp = Path(tempfile.mkdtemp(prefix="smolvla_compat_"))
+    for f in model_dir.iterdir():
+        if f.name != "config.json":
+            (tmp / f.name).symlink_to(f.resolve())
+    (tmp / "config.json").write_text(json.dumps({k: v for k, v in cfg.items() if k in known}, indent=4))
+    if logger is not None:
+        logger.warn(f"checkpoint config has fields this lerobot doesn't know, ignoring them: {unknown}")
+    return tmp
+
+
 def resolve_model_dir(model_path: str) -> Path:
     p = Path(model_path).expanduser()
     if p.is_absolute() and p.is_dir():
@@ -96,6 +124,7 @@ class SmolVLAOpenLoop(Node):
         self.declare_parameter("rate_hz", 10.0)        # must equal the dataset fps
         self.declare_parameter("n_action_steps", 40)   # max actions used from one chunk
         self.declare_parameter("stop_when_empty", True)
+        self.declare_parameter("max_image_age_s", 0.5)  # don't plan from images older than this
         self.declare_parameter("lead_s", 0.0)    # publish the action planned this far ahead (actuator lag)
         self.declare_parameter("num_steps", 0)   # denoising steps per inference; 0 = checkpoint default
         self.declare_parameter("mode", "rgb")  # rgb | depth | dual
@@ -115,7 +144,8 @@ class SmolVLAOpenLoop(Node):
         if model_path and model_path.strip():
             model_dir = resolve_model_dir(model_path)
             self.get_logger().info(f"loading smolvla from {model_dir} on {self.device}")
-            self.policy = SmolVLAPolicy.from_pretrained(str(model_dir)).to(self.device).eval()
+            load_dir = compat_model_dir(model_dir, self.get_logger())
+            self.policy = SmolVLAPolicy.from_pretrained(str(load_dir)).to(self.device).eval()
             self.get_logger().info(f"loaded {model_dir}")
         else:
             self.get_logger().info(f"loading base smolvla on {self.device}")
@@ -160,6 +190,9 @@ class SmolVLAOpenLoop(Node):
 
         self.latest_rgb = None
         self.latest_depth = None
+        self.rgb_t = None                # monotonic receive time of latest_rgb / latest_depth
+        self.depth_t = None
+        self.max_image_age_s = float(self.get_parameter("max_image_age_s").value)
         self.plan = None                 # (chunk [N,2], monotonic time of its images)
         self.plan_lock = threading.Lock()
         self.running = True
@@ -189,10 +222,21 @@ class SmolVLAOpenLoop(Node):
     def _load_action_stats(self, model_dir, stats_path):
         """The policy outputs mean/std-normalised actions; recover speed = raw*std + mean.
         Normally the checkpoint's postprocessor holds these stats."""
+        # stats_path: absolute, or relative to the repo root (like model_path). Empty -> use
+        # <model folder>/dataset_stats.json if it exists, else the checkpoint's postprocessor.
+        if stats_path:
+            sp = Path(stats_path).expanduser()
+            if not sp.is_absolute():
+                sp = Path(__file__).resolve().parents[4] / sp
+            stats_path = str(sp)
+        elif model_dir is not None and (Path(model_dir) / "dataset_stats.json").exists():
+            stats_path = str(Path(model_dir) / "dataset_stats.json")
+        if stats_path:
+            self.get_logger().info(f"action stats from {stats_path}")
         try:
             if stats_path:
                 import json
-                s = json.loads(Path(stats_path).expanduser().read_text())["action"]
+                s = json.loads(Path(stats_path).read_text())["action"]
                 mean = np.asarray(s["mean"], dtype=np.float32)
                 std = np.asarray(s["std"], dtype=np.float32)
             else:
@@ -226,9 +270,11 @@ class SmolVLAOpenLoop(Node):
 
     def _on_rgb(self, msg: Image):
         self.latest_rgb = msg
+        self.rgb_t = time.monotonic()
 
     def _on_depth(self, msg: Image):
         self.latest_depth = msg
+        self.depth_t = time.monotonic()
 
     def _zeros(self):
         return torch.zeros(1, 3, 240, 424, device=self.device)
@@ -237,7 +283,10 @@ class SmolVLAOpenLoop(Node):
         """One model run on the newest images. Returns (chunk [N,2] in setpoint units,
         monotonic time the images were taken, inference seconds), or (None, None, 0)."""
         rgb_msg, depth_msg = self.latest_rgb, self.latest_depth   # snapshot
-        obs_time = time.monotonic()
+        # The plan's clock starts when the oldest image it uses arrived, not now.
+        used = [t for t, on in ((self.rgb_t, self.mode in ("rgb", "dual")),
+                                (self.depth_t, self.mode in ("depth", "dual"))) if on and t is not None]
+        obs_time = min(used) if used else time.monotonic()
 
         # Build the two image tensors according to mode
         if self.mode in ("rgb", "dual"):
@@ -289,9 +338,29 @@ class SmolVLAOpenLoop(Node):
         chunk = raw * self.act_std + self.act_mean   # back to setpoint units; clamping is in smolvla_to_drive
         return chunk, obs_time, dt
 
+    def _images_fresh(self):
+        now = time.monotonic()
+        need = []
+        if self.mode in ("rgb", "dual"):
+            need.append(self.rgb_t)
+        if self.mode in ("depth", "dual"):
+            need.append(self.depth_t)
+        return all(t is not None and now - t <= self.max_image_age_s for t in need)
+
     def _inference_loop(self):
         """Background thread: run the model back to back, swap in each new chunk."""
+        was_fresh = False
         while self.running and rclpy.ok():
+            if not self._images_fresh():
+                if was_fresh:                # camera stream stopped or link dropped
+                    with self.plan_lock:
+                        self.plan = None     # -> _tick publishes stop at once
+                    self.get_logger().warn(
+                        f"camera images older than {self.max_image_age_s:.1f}s -> plan dropped, stopping")
+                was_fresh = False
+                time.sleep(0.05)
+                continue
+            was_fresh = True
             try:
                 chunk, obs_time, dt = self._run_inference()
             except Exception as e:  # noqa: BLE001

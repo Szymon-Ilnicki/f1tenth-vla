@@ -11,6 +11,8 @@ smolvla_openloop:
     n_action_steps: 40   # max actions used from one chunk; must exceed 2 x (inference time + lead_s) x rate_hz
     lead_s: 0.0          # extra look-ahead [s] on top of the measured inference delay, for actuator lag
     max_image_age_s: 0.5 # stop planning (and stop the car) if camera frames are older than this
+    precision: "fp32"    # fp32 | fp16 | bf16 -- reduced precision via autocast; check with vla_replay --precision first
+    publish_chunk: true  # full plan on /smolvla/chunk_steer and /smolvla/chunk_speed (Foxglove: Plot, x-axis = index)
     num_steps: 0         # denoising steps per inference; 0 = checkpoint default (10). Fewer = faster
     stats_path: ""       # empty = <model folder>/dataset_stats.json; or a path, relative to the repo root
     #max_speed: 0.5

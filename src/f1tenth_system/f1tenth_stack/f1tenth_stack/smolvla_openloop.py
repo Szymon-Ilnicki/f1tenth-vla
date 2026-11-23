@@ -8,6 +8,7 @@ planned for the current moment: index = (now - time the images were taken + lead
 So the actions that fell due while the model was running are skipped, and every
 action is executed at the moment it was planned for.
 """
+import contextlib
 import threading
 import time
 import cv2
@@ -126,6 +127,8 @@ class SmolVLAOpenLoop(Node):
         self.declare_parameter("stop_when_empty", True)
         self.declare_parameter("max_image_age_s", 0.5)  # don't plan from images older than this
         self.declare_parameter("lead_s", 0.0)    # publish the action planned this far ahead (actuator lag)
+        self.declare_parameter("precision", "fp32")  # fp32 | fp16 | bf16 (autocast; weights stay fp32)
+        self.declare_parameter("publish_chunk", True)  # full plan on /smolvla/chunk_steer, /smolvla/chunk_speed
         self.declare_parameter("num_steps", 0)   # denoising steps per inference; 0 = checkpoint default
         self.declare_parameter("mode", "rgb")  # rgb | depth | dual
         self.declare_parameter(
@@ -175,6 +178,21 @@ class SmolVLAOpenLoop(Node):
                 inner.num_steps = num_steps
         self.get_logger().info(f"denoising num_steps={self.policy.config.num_steps}, lead_s={self.lead_s:.2f}")
 
+        prec = str(self.get_parameter("precision").value).lower()
+        dtypes = {"fp16": torch.float16, "bf16": torch.bfloat16}
+        if prec not in ("fp32", *dtypes):
+            self.get_logger().warn(f"precision '{prec}' not recognised, using fp32")
+            prec = "fp32"
+        if prec != "fp32" and self.device != "cuda":
+            self.get_logger().warn(f"precision {prec} needs CUDA, using fp32")
+            prec = "fp32"
+        if prec == "bf16" and not torch.cuda.is_bf16_supported():
+            self.get_logger().warn("bf16 not supported on this GPU, using fp16")
+            prec = "fp16"
+        self.autocast_dtype = dtypes.get(prec)
+        self.get_logger().info(f"precision: {prec}" + (" (autocast)" if self.autocast_dtype else ""))
+        self.publish_chunk = bool(self.get_parameter("publish_chunk").value)
+
         self.get_logger().info(
             f"n_action_steps={self.n_action_steps} "
             f"chunk_size={self.chunk_size} "
@@ -211,6 +229,8 @@ class SmolVLAOpenLoop(Node):
         self.create_subscription(String, "/task", self._on_task, 10)
         self.pub_act = self.create_publisher(Float32MultiArray, "/smolvla/action", 10)
         self.pub_dt = self.create_publisher(Float32, "/smolvla/infer_dt", 10)
+        self.pub_chunk_steer = self.create_publisher(Float32MultiArray, "/smolvla/chunk_steer", 10)
+        self.pub_chunk_speed = self.create_publisher(Float32MultiArray, "/smolvla/chunk_speed", 10)
 
         period = 1.0 / max(self.rate_hz, 0.2)
         self.create_timer(period, self._tick)
@@ -324,7 +344,9 @@ class SmolVLAOpenLoop(Node):
         led_on()
         try:
             t0 = time.perf_counter()
-            with torch.no_grad():
+            autocast = (torch.autocast(device_type="cuda", dtype=self.autocast_dtype)
+                        if self.autocast_dtype is not None else contextlib.nullcontext())
+            with torch.no_grad(), autocast:
                 if hasattr(self.policy, "predict_action_chunk"):
                     out = self.policy.predict_action_chunk(batch)[0]          # [chunk, action_dim]
                 else:                                                         # older lerobot
@@ -374,6 +396,11 @@ class SmolVLAOpenLoop(Node):
                 self.plan = (chunk[:self.n_action_steps], obs_time)
             age = time.monotonic() - obs_time + self.lead_s
             self.pub_dt.publish(Float32(data=float(dt)))
+            if self.publish_chunk:
+                for pub, col in ((self.pub_chunk_speed, 0), (self.pub_chunk_steer, 1)):
+                    m = Float32MultiArray()
+                    m.data = [float(v) for v in chunk[:, col]]
+                    pub.publish(m)
             self.get_logger().info(
                 f"dt={dt:.3f}s new chunk, starting at action {int(round(age * self.rate_hz))}",
                 throttle_duration_sec=2.0)
@@ -390,7 +417,8 @@ class SmolVLAOpenLoop(Node):
         if plan is not None:
             chunk, obs_time = plan
             i = int(round((time.monotonic() - obs_time + self.lead_s) * self.rate_hz))
-            if 0 <= i < len(chunk):
+            i = max(i, 0)                # negative lead_s can ask for "before the plan": use its first action
+            if i < len(chunk):
                 vec = [float(v) for v in chunk[i]]
         if vec is None:
             if not self.stop_when_empty:

@@ -9,7 +9,7 @@ from datetime import datetime
 
 # ==================== CONFIG (edit these) ====================
 BAG_DIR = "/home/hwf1tenth/bags/coolbags"
-BAG_PREFIX = "ep"
+BAG_PREFIX = "today"
 TOPICS = [# empty will record all by appending "-a" to the command
 #    "/camera/camera/color/image_raw",
 #    "/teleop",

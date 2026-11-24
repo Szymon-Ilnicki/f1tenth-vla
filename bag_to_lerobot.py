@@ -36,6 +36,8 @@ Examples:
       --default-task "complete laps {dir} fast"
 """
 import argparse
+import sys
+import time
 from pathlib import Path
  
 import cv2
@@ -165,6 +167,39 @@ def iter_synced(bag_dir, first_task, use_recorded=True):
             yield t * 1e-9, img_np(msg), last_depth, last_cmd, task
  
  
+class Progress:
+    """'[i/N] bag' prefix plus an in-place frame counter on the current line."""
+
+    def __init__(self, total):
+        self.total, self.i, self.t0 = total, 0, time.time()
+        self.tty = sys.stdout.isatty()
+
+    def next_bag(self, name):
+        self.i += 1
+        self.name = name
+        self.last = 0.0
+        self.tick(0)
+
+    def tick(self, n, label="frames"):
+        if not self.tty or time.time() - self.last < 0.5:
+            return
+        self.last = time.time()
+        el = time.time() - self.t0
+        print(f"\r\033[K[{self.i}/{self.total}] {self.name}: {n} {label}  ({el / 60:.1f} min elapsed)",
+              end="", flush=True)
+
+    def clear(self):
+        if self.tty:
+            print("\r\033[K", end="", flush=True)
+
+    @property
+    def tag(self):
+        return f"[{self.i}/{self.total}]"
+
+
+PROGRESS = None
+
+
 class FrameGrid:
     """Pick camera frames on a fixed 1/fps time grid. The camera runs at ~15 Hz, so
     "at least 1/fps since the last kept frame" would keep every 2nd frame (7.5 fps)
@@ -206,6 +241,10 @@ def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
             "task": task,
         })
         n += 1
+        if PROGRESS:
+            PROGRESS.tick(n, "mirrored frames" if mirror else "frames")
+    if PROGRESS:
+        PROGRESS.clear()
     if n:
         ds.save_episode()
     return n
@@ -267,6 +306,8 @@ def takeover_segments(bag, a):
         if ok and act[0] >= a.min_speed and task_direction(task) == 0:
             stats["no_dir"] += 1
             ok = False
+        if PROGRESS:
+            PROGRESS.tick(sum(map(len, segs)) + len(cur), "takeover frames found")
         if ok and act[0] >= a.min_speed:
             cur.append((t, img_np(deserialize_message(img_data, Image)),
                         depth_to_rgb(deserialize_message(depth_data, Image)), act.copy(), task))
@@ -275,6 +316,8 @@ def takeover_segments(bag, a):
             cur = []
     if cur:
         segs.append(cur)
+    if PROGRESS:
+        PROGRESS.clear()
     out = []
     for s in segs:
         s = [f for f in s if f[0] - s[0][0] >= a.takeover_start_trim]
@@ -353,6 +396,8 @@ def main():
     if not bags and not tbags:
         raise SystemExit("give --bags and/or --takeover-bags")
     print(f"found {len(bags)} lap bags, {len(tbags)} takeover bags")
+    global PROGRESS
+    PROGRESS = Progress(len(bags) + len(tbags))
  
     ds = LeRobotDataset.create(
         repo_id=a.repo_id,
@@ -372,6 +417,7 @@ def main():
  
     counts, problems = {}, []
     for bag in bags:
+        PROGRESS.next_bag(bag.name)
         d, mean_steer, tasks = scan_bag(bag, a.min_speed)
         if d == 0:
             print(f"{bag.name}: no driving commands, skipped")
@@ -391,7 +437,7 @@ def main():
                     continue
             for mirror in ([False, True] if a.mirror else [False]):
                 n = add_episode(ds, bag, ov, a.fps, mirror, counts, use_recorded=False)
-                print(f"{bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
+                print(f"{PROGRESS.tag} {bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                       f"{mean_steer:+.3f}, task '{mirror_task(ov) if mirror else ov}', {n} frames")
             continue
         use_recorded = bool(tasks) and all(task_direction(t) != 0 for t in tasks)
@@ -417,11 +463,12 @@ def main():
         for mirror in ([False, True] if a.mirror else [False]):
             n = add_episode(ds, bag, first_task, a.fps, mirror, counts, use_recorded)
             shown = mirror_task(first_task) if mirror else first_task
-            print(f"{bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
+            print(f"{PROGRESS.tag} {bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                   f"{mean_steer:+.3f}, task '{shown}', {n} frames")
     lap_frames = sum(counts.values())
     takeover_frames = 0
     for bag in tbags:
+        PROGRESS.next_bag(bag.name)
         try:
             segs, st = takeover_segments(bag, a)
         except ValueError as e:
@@ -432,13 +479,14 @@ def main():
         if st["no_dir"]:
             problems.append(f"{bag.name}: {st['no_dir']} takeover frames dropped, /task has no direction word")
         secs = sum(s[-1][0] - s[0][0] + 1.0 / a.fps for s in segs)
-        print(f"{bag.name} (takeovers): {len(segs)} kept, {st['short']} too short, "
+        print(f"{PROGRESS.tag} {bag.name} (takeovers): {len(segs)} kept, {st['short']} too short, "
               f"{secs:.1f} s, x{a.takeover_repeat}{' x2 mirrored' if a.mirror else ''}")
         for seg in segs:
             for _ in range(a.takeover_repeat):
                 for mirror in ([False, True] if a.mirror else [False]):
                     add_frames(ds, seg, mirror, counts)
                     takeover_frames += len(seg)
+    print(f"finalizing dataset ... ({(time.time() - PROGRESS.t0) / 60:.1f} min so far)", flush=True)
     ds.finalize()
     if tbags:
         print(f"\nlap frames {lap_frames}, takeover frames {takeover_frames} (incl. repeats)")
@@ -454,4 +502,3 @@ def main():
  
 if __name__ == "__main__":
     main()
- 

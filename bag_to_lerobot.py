@@ -24,6 +24,9 @@ Takeovers shorter than --takeover-min-len are dropped, and each one is added
 --takeover-repeat times (oversampling) and mirrored with --mirror. The task is the
 recorded /task at that moment; frames whose task has no direction word are dropped.
 
+Task override: a file task.txt inside a bag's folder replaces the recorded /task
+for every frame of that bag (e.g. when the wrong task was set while recording).
+
 Examples:
   python3 bag_to_lerobot.py --bags bags/track_v2 --out lerobot_output/track_v3 \
       --repo-id local/track_v3 --mirror
@@ -208,7 +211,16 @@ def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
     return n
  
  
-def iter_takeover(bag_dir, teleop_max_age):
+def task_override(bag_dir):
+    """Contents of <bag>/task.txt, or None."""
+    f = Path(bag_dir) / "task.txt"
+    if f.is_file():
+        t = f.read_text().strip()
+        return t or None
+    return None
+
+
+def iter_takeover(bag_dir, teleop_max_age, override=None):
     """Per colour frame: (t, human_ok, rgb_msg, depth_msg, action, task).
     human_ok = /human_control True and /teleop newer than teleop_max_age.
     Images are returned undecoded so unused frames cost nothing."""
@@ -218,7 +230,7 @@ def iter_takeover(bag_dir, teleop_max_age):
     if HUMAN_TOPIC not in types:
         raise ValueError(f"no {HUMAN_TOPIC} topic")
     last_cmd, last_cmd_t = None, -1e18
-    last_depth, task, human = None, "", False
+    last_depth, task, human = None, override or "", False
     while reader.has_next():
         topic, data, t_ns = reader.read_next()
         if topic not in types:
@@ -237,7 +249,7 @@ def iter_takeover(bag_dir, teleop_max_age):
         if topic == CMD_TOPIC:
             last_cmd, last_cmd_t = cmd_vec(msg), t
         elif topic == TASK_TOPIC:
-            if msg.data:
+            if msg.data and not override:
                 task = msg.data
         elif topic == HUMAN_TOPIC:
             human = bool(msg.data)
@@ -248,7 +260,8 @@ def takeover_segments(bag, a):
     segs, cur = [], []
     grid = FrameGrid(a.fps)
     stats = {"short": 0, "no_dir": 0}
-    for t, ok, img_data, depth_data, act, task in iter_takeover(bag, a.teleop_max_age):
+    for t, ok, img_data, depth_data, act, task in iter_takeover(bag, a.teleop_max_age,
+                                                                task_override(bag)):
         if not grid.keep(t):
             continue
         if ok and act[0] >= a.min_speed and task_direction(task) == 0:
@@ -363,6 +376,24 @@ def main():
         if d == 0:
             print(f"{bag.name}: no driving commands, skipped")
             continue
+        ov = task_override(bag)
+        if ov:
+            print(f"{bag.name}: task.txt overrides recorded {tasks} -> '{ov}'")
+            if task_direction(ov) == 0:
+                problems.append(f"{bag.name}: task.txt '{ov}' has no direction word, skipped")
+                continue
+            if task_direction(ov) != d:
+                msg = (f"{bag.name}: task.txt '{ov}' but steering says "
+                       f"{'anticlockwise' if d > 0 else 'clockwise'} (mean steer {mean_steer:+.3f})")
+                problems.append(msg)
+                if a.strict:
+                    print("SKIPPED", msg)
+                    continue
+            for mirror in ([False, True] if a.mirror else [False]):
+                n = add_episode(ds, bag, ov, a.fps, mirror, counts, use_recorded=False)
+                print(f"{bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
+                      f"{mean_steer:+.3f}, task '{mirror_task(ov) if mirror else ov}', {n} frames")
+            continue
         use_recorded = bool(tasks) and all(task_direction(t) != 0 for t in tasks)
         if tasks and not use_recorded:
             problems.append(f"{bag.name}: recorded task has no direction word {tasks}; "
@@ -396,6 +427,8 @@ def main():
         except ValueError as e:
             problems.append(f"{bag.name}: {e}, skipped")
             continue
+        if task_override(bag):
+            print(f"{bag.name}: task.txt override '{task_override(bag)}'")
         if st["no_dir"]:
             problems.append(f"{bag.name}: {st['no_dir']} takeover frames dropped, /task has no direction word")
         secs = sum(s[-1][0] - s[0][0] + 1.0 / a.fps for s in segs)

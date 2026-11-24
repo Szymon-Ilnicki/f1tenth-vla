@@ -63,3 +63,4 @@ pid_controller:
     kd: 0.0
     i_limit: 0.8
     steer_rate: 2.0
+    cmd_timeout: 0.5      # stop if no /ackermann_cmd for this long [s]

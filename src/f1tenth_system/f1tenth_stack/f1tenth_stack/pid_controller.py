@@ -20,12 +20,15 @@ class PidTracker(Node):
         self.declare_parameter('speed_max', 10000.0)
         self.declare_parameter('i_limit', 0.4)
         self.declare_parameter('steer_rate', 1.0)
+        # stop (target speed 0) if no setpoint arrives for this long; 0 disables
+        self.declare_parameter('cmd_timeout', 0.5)
 
         self.kp = self.get_parameter('kp').value
         self.ki = self.get_parameter('ki').value
         self.kd = self.get_parameter('kd').value
         self.i_limit = self.get_parameter('i_limit').value
         self.steer_rate = self.get_parameter('steer_rate').value
+        self.cmd_timeout = self.get_parameter('cmd_timeout').value
 
         self.steering_angle_to_servo_gain = self.get_parameter('steering_angle_to_servo_gain').value
         self.steering_angle_to_servo_offset = self.get_parameter('steering_angle_to_servo_offset').value
@@ -43,6 +46,8 @@ class PidTracker(Node):
         self.integral = 0.0
         self.prev_error = 0.0
         self.last = self.get_clock().now()
+        self.last_setpoint = None
+        self.timed_out = False
 
         self.create_subscription(AckermannDriveStamped, '/ackermann_cmd', self.on_setpoint, 10)
         self.create_subscription(Odometry, '/odom', self.on_odom, 10)
@@ -53,6 +58,10 @@ class PidTracker(Node):
     def on_setpoint(self, msg):
         self.target_speed = msg.drive.speed
         self.target_steer = msg.drive.steering_angle
+        self.last_setpoint = self.get_clock().now()
+        if self.timed_out:
+            self.get_logger().info('setpoints resumed')
+            self.timed_out = False
 
     def on_odom(self, msg):
         self.measured_speed = msg.twist.twist.linear.x
@@ -63,6 +72,15 @@ class PidTracker(Node):
         self.last = now
         if dt <= 0.0 or dt > 0.5:
             return
+
+        # No fresh setpoint (joystick released with nothing on /drive, node crashed,
+        # ...): stop instead of holding the last speed forever.
+        if self.cmd_timeout > 0 and self.last_setpoint is not None and \
+                (now - self.last_setpoint).nanoseconds * 1e-9 > self.cmd_timeout:
+            if not self.timed_out:
+                self.get_logger().warn(f'no setpoint for {self.cmd_timeout} s, stopping')
+                self.timed_out = True
+            self.target_speed = 0.0
 
         if abs(self.target_speed) < 0.05:          # dead-band
             self.integral = 0.0

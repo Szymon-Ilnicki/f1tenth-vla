@@ -190,6 +190,18 @@ def analyse(path, a):
     straight = auto & (np.abs(dl_now) < 0.02)
     straight_curv = float(np.nanmean(wz_c[straight] / v[straight])) if straight.sum() > 10 else np.nan
 
+    # takeovers: human control starts while the VLA was driving within the last second
+    look = int(a.grid_hz)
+    starts = np.flatnonzero(human[1:] & ~human[:-1]) + 1
+    takeovers = [i for i in starts if auto[max(0, i - look):i].any()]
+    durs = []
+    for i in takeovers:
+        j = i
+        while j < len(human) and human[j]:
+            j += 1
+        durs.append((j - i) / a.grid_hz)
+    auto_min = auto.sum() / a.grid_hz / 60
+
     idt = d["idt"][:, 1] if len(d["idt"]) else np.zeros(0)
     def auto_vals(arr):
         if len(arr) == 0 or auto.sum() == 0:
@@ -201,6 +213,10 @@ def analyse(path, a):
         name=os.path.basename(path.rstrip("/")),
         topics=present,
         auto_seconds=float(auto.sum() / a.grid_hz),
+        takeovers=len(takeovers),
+        takeovers_per_min=float(len(takeovers) / auto_min) if auto_min > 0 else np.nan,
+        takeover_mean_s=float(np.mean(durs)) if durs else np.nan,
+        takeover_times=[float(g[i]) for i in takeovers],
         tasks=sorted(set(t for _, t in d["task"])),
         infer_dt_mean=float(idt.mean()) if len(idt) else np.nan,
         infer_dt_p90=float(np.percentile(idt, 90)) if len(idt) else np.nan,
@@ -241,6 +257,9 @@ def main():
 
     rows = [
         ("autonomous time [s]", lambda r: fmt(r["auto_seconds"], "{:.0f}")),
+        ("takeovers", lambda r: str(r["takeovers"])),
+        ("takeovers per auto minute", lambda r: fmt(r["takeovers_per_min"], "{:.1f}")),
+        ("takeover mean length [s]", lambda r: fmt(r["takeover_mean_s"], "{:.1f}")),
         ("infer_dt mean / p90 [s]", lambda r: f"{fmt(r['infer_dt_mean'], '{:.2f}')} / {fmt(r['infer_dt_p90'], '{:.2f}')}"),
         ("steer gain (1 = ideal)", lambda r: fmt(r["fit"].get("gain"), "{:.2f}")),
         ("steer offset [rad]", lambda r: fmt(r["fit"].get("steer_offset_rad"))),

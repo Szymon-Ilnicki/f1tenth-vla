@@ -13,10 +13,24 @@ the detected direction and --default-task.
  
 observation.state is written as zeros (SmolVLA needs a state input); the replay
 script and smolvla_openloop.py feed zeros too.
- 
-Example:
+
+Takeover mode (--takeover-bags): bags recorded while the model drove and a human
+took over when needed (HG-DAgger). Only frames where /human_control is True, /teleop
+is fresh (the joystick only publishes while the deadman is held) and the commanded
+speed is >= --min-speed are kept; reversing and standing still are dropped. Each
+contiguous takeover becomes its own episode, so action chunks never mix in the
+model's own actions (LeRobot pads past the episode end and masks the padding).
+Takeovers shorter than --takeover-min-len are dropped, and each one is added
+--takeover-repeat times (oversampling) and mirrored with --mirror. The task is the
+recorded /task at that moment; frames whose task has no direction word are dropped.
+
+Examples:
   python3 bag_to_lerobot.py --bags bags/track_v2 --out lerobot_output/track_v3 \
       --repo-id local/track_v3 --mirror
+  python3 bag_to_lerobot.py --bags ~/bags/track_v4_all \
+      --takeover-bags ~/bags/experiment ~/bags/takeovers_r1 --takeover-repeat 3 \
+      --out lerobot_output/track_v5 --repo-id local/track_v5 --mirror \
+      --default-task "complete laps {dir} fast"
 """
 import argparse
 from pathlib import Path
@@ -34,6 +48,7 @@ IMG_TOPIC = "/camera/camera/color/image_raw"
 DEPTH_TOPIC = "/camera/camera/depth/image_rect_raw"
 CMD_TOPIC = "/teleop"
 TASK_TOPIC = "/task"
+HUMAN_TOPIC = "/human_control"
  
 # depth normalization (mm) -- must match smolvla_openloop.py
 DEPTH_MIN = 200
@@ -147,15 +162,32 @@ def iter_synced(bag_dir, first_task, use_recorded=True):
             yield t * 1e-9, img_np(msg), last_depth, last_cmd, task
  
  
+class FrameGrid:
+    """Pick camera frames on a fixed 1/fps time grid. The camera runs at ~15 Hz, so
+    "at least 1/fps since the last kept frame" would keep every 2nd frame (7.5 fps)
+    while the dataset claims 10 fps; stepping a grid keeps the true average rate."""
+
+    def __init__(self, fps):
+        self.dt = 1.0 / fps
+        self.next = None
+
+    def keep(self, t):
+        if self.next is None:
+            self.next = t
+        if t < self.next - 1e-3:
+            return False
+        self.next += self.dt
+        if t - self.next > self.dt:  # after a gap in the bag, restart the grid
+            self.next = t + self.dt
+        return True
+
+
 def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
     n = 0
-    last_keep = None
+    grid = FrameGrid(fps)
     for t, img, depth_img, act, task in iter_synced(bag, first_task, use_recorded):
-        if last_keep is None:
-            last_keep = t - 1
-        if t - last_keep < 1.0 / fps - 1e-3:
+        if not grid.keep(t):
             continue
-        last_keep = t
         act = act.copy()
         if mirror:
             img = np.ascontiguousarray(img[:, ::-1])
@@ -176,24 +208,138 @@ def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
     return n
  
  
+def iter_takeover(bag_dir, teleop_max_age):
+    """Per colour frame: (t, human_ok, rgb_msg, depth_msg, action, task).
+    human_ok = /human_control True and /teleop newer than teleop_max_age.
+    Images are returned undecoded so unused frames cost nothing."""
+    wanted = {IMG_TOPIC, DEPTH_TOPIC, CMD_TOPIC, TASK_TOPIC, HUMAN_TOPIC}
+    reader = open_bag(bag_dir, wanted)
+    types = bag_types(reader, wanted)
+    if HUMAN_TOPIC not in types:
+        raise ValueError(f"no {HUMAN_TOPIC} topic")
+    last_cmd, last_cmd_t = None, -1e18
+    last_depth, task, human = None, "", False
+    while reader.has_next():
+        topic, data, t_ns = reader.read_next()
+        if topic not in types:
+            continue
+        t = t_ns * 1e-9
+        if topic == IMG_TOPIC:
+            if last_depth is None:
+                continue
+            ok = human and last_cmd is not None and (t - last_cmd_t) <= teleop_max_age
+            yield t, ok, data, last_depth, last_cmd, task
+            continue
+        if topic == DEPTH_TOPIC:
+            last_depth = data
+            continue
+        msg = deserialize_message(data, types[topic])
+        if topic == CMD_TOPIC:
+            last_cmd, last_cmd_t = cmd_vec(msg), t
+        elif topic == TASK_TOPIC:
+            if msg.data:
+                task = msg.data
+        elif topic == HUMAN_TOPIC:
+            human = bool(msg.data)
+
+
+def takeover_segments(bag, a):
+    """List of takeovers, each a list of (t, rgb, depth_rgb, action, task); plus stats."""
+    segs, cur = [], []
+    grid = FrameGrid(a.fps)
+    stats = {"short": 0, "no_dir": 0}
+    for t, ok, img_data, depth_data, act, task in iter_takeover(bag, a.teleop_max_age):
+        if not grid.keep(t):
+            continue
+        if ok and act[0] >= a.min_speed and task_direction(task) == 0:
+            stats["no_dir"] += 1
+            ok = False
+        if ok and act[0] >= a.min_speed:
+            cur.append((t, img_np(deserialize_message(img_data, Image)),
+                        depth_to_rgb(deserialize_message(depth_data, Image)), act.copy(), task))
+        elif cur:
+            segs.append(cur)
+            cur = []
+    if cur:
+        segs.append(cur)
+    out = []
+    for s in segs:
+        s = [f for f in s if f[0] - s[0][0] >= a.takeover_start_trim]
+        if not s or (s[-1][0] - s[0][0] + 1.0 / a.fps) < a.takeover_min_len:
+            stats["short"] += 1
+            continue
+        out.append(s)
+    return out, stats
+
+
+def add_frames(ds, frames, mirror, counts):
+    for _, img, depth_img, act, task in frames:
+        act = act.copy()
+        if mirror:
+            img = np.ascontiguousarray(img[:, ::-1])
+            depth_img = np.ascontiguousarray(depth_img[:, ::-1])
+            act[1] = -act[1]
+            task = mirror_task(task)
+        counts[task] = counts.get(task, 0) + 1
+        ds.add_frame({
+            "observation.images.camera1": img,
+            "observation.images.camera2": depth_img,
+            "observation.state": np.zeros(2, dtype=np.float32),
+            "action": act,
+            "task": task,
+        })
+    ds.save_episode()
+
+
+def find_bags(folders, pattern):
+    """Bag directories (containing metadata.yaml) matching pattern in each folder,
+    or the folder itself if it is a bag."""
+    bags = []
+    for f in folders:
+        f = Path(f).expanduser()
+        if (f / "metadata.yaml").is_file():
+            bags.append(f)
+        else:
+            bags += [b for b in sorted(f.glob(pattern)) if (b / "metadata.yaml").is_file()]
+    return bags
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--bags", default=str(HERE / "bags/track_v2"), help="folder with ep* bag directories")
+    p.add_argument("--bags", nargs="*", default=[],
+                   help="folder(s) with ep* bag directories of human-driven laps")
+    p.add_argument("--takeover-bags", nargs="*", default=[],
+                   help="folder(s) with model-driven bags (any name) or bag directories; "
+                        "only human takeovers are used")
+    p.add_argument("--takeover-repeat", type=int, default=3,
+                   help="add each takeover episode this many times (oversampling)")
+    p.add_argument("--takeover-min-len", type=float, default=0.5,
+                   help="drop takeovers shorter than this [s]")
+    p.add_argument("--takeover-start-trim", type=float, default=0.0,
+                   help="drop this many seconds from the start of each takeover")
+    p.add_argument("--teleop-max-age", type=float, default=0.2,
+                   help="a takeover frame needs a /teleop message at most this old [s]")
     p.add_argument("--out", default=str(HERE / "lerobot_output/track_v3"))
     p.add_argument("--repo-id", default="local/track_v3")
     p.add_argument("--fps", type=int, default=10)
     p.add_argument("--mirror", action="store_true", help="also add every bag flipped left-right")
-    p.add_argument("--min-speed", type=float, default=0.3, help="ignore stationary commands for direction")
+    p.add_argument("--min-speed", type=float, default=0.3,
+                   help="ignore stationary commands for direction; takeover frames below it are dropped")
     p.add_argument("--default-task", default="complete laps {dir} around the track",
                    help="for bags with no /task; {dir} becomes anticlockwise/clockwise from steering")
     p.add_argument("--strict", action="store_true",
                    help="skip bags whose recorded task direction disagrees with their steering")
     a = p.parse_args()
  
-    bags = sorted(Path(a.bags).expanduser().glob("ep*"))
-    if not bags:
+    bags = find_bags(a.bags, "ep*")
+    tbags = find_bags(a.takeover_bags, "*")
+    if a.bags and not bags:
         raise SystemExit(f"no ep* bags found in {a.bags}")
-    print(f"found {len(bags)} bags in {a.bags}")
+    if a.takeover_bags and not tbags:
+        raise SystemExit(f"no bags found in {a.takeover_bags}")
+    if not bags and not tbags:
+        raise SystemExit("give --bags and/or --takeover-bags")
+    print(f"found {len(bags)} lap bags, {len(tbags)} takeover bags")
  
     ds = LeRobotDataset.create(
         repo_id=a.repo_id,
@@ -242,7 +388,27 @@ def main():
             shown = mirror_task(first_task) if mirror else first_task
             print(f"{bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                   f"{mean_steer:+.3f}, task '{shown}', {n} frames")
+    lap_frames = sum(counts.values())
+    takeover_frames = 0
+    for bag in tbags:
+        try:
+            segs, st = takeover_segments(bag, a)
+        except ValueError as e:
+            problems.append(f"{bag.name}: {e}, skipped")
+            continue
+        if st["no_dir"]:
+            problems.append(f"{bag.name}: {st['no_dir']} takeover frames dropped, /task has no direction word")
+        secs = sum(s[-1][0] - s[0][0] + 1.0 / a.fps for s in segs)
+        print(f"{bag.name} (takeovers): {len(segs)} kept, {st['short']} too short, "
+              f"{secs:.1f} s, x{a.takeover_repeat}{' x2 mirrored' if a.mirror else ''}")
+        for seg in segs:
+            for _ in range(a.takeover_repeat):
+                for mirror in ([False, True] if a.mirror else [False]):
+                    add_frames(ds, seg, mirror, counts)
+                    takeover_frames += len(seg)
     ds.finalize()
+    if tbags:
+        print(f"\nlap frames {lap_frames}, takeover frames {takeover_frames} (incl. repeats)")
     print("\nframes per task:")
     for task, n in sorted(counts.items()):
         print(f"  {n:6d}  {task}")

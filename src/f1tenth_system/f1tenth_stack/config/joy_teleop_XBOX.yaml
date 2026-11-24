@@ -14,3 +14,20 @@ joy_teleop:
           axis: 2
           scale: 0.34
           offset: 0.0
+
+# R2 takeover mode (handled by human_led): constant speed, steering from the right
+# stick, left stick ignored. R2 is either a button (auto_button) or an analogue
+# trigger axis (auto_axis + rest/pressed values). Find out which with
+#   ros2 topic echo /joy
+# while pressing R2, then set ONE of auto_button / auto_axis (-1 = unused).
+human_led:
+  ros__parameters:
+    deadman_buttons: [5]        # R1, must match joy_teleop above
+    auto_button: 7              # R2 as a button  (set to -1 if R2 is an axis)
+    auto_axis: -1               # R2 as a trigger axis index
+    auto_axis_rest: 1.0         # axis value with R2 released
+    auto_axis_pressed: -1.0     # axis value with R2 fully pressed
+    auto_speed: 1.2             # speed setpoint (~0.5 m/s)
+    steer_axis: 2               # right stick X, same as joy_teleop
+    steer_scale: 0.34           # same as joy_teleop
+

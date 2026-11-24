@@ -66,6 +66,7 @@ def generate_launch_description():
     executable='human_led',
     name='human_led',
     output='screen',
+    parameters=[LaunchConfiguration('joy_config')],
     ))
     ld.add_action(Node(
         package='f1tenth_stack',

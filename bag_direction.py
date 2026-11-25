@@ -32,7 +32,7 @@ def scan(path, topic, min_speed):
     msg_t = get_message(types[topic])
     task_t = get_message(types["/task"]) if "/task" in types else None
 
-    steer, stamps, tasks = [], [], Counter()
+    steer, speeds, stamps, tasks = [], [], [], Counter()
     while r.has_next():
         name, data, t_ns = r.read_next()
         if name == topic:
@@ -40,6 +40,7 @@ def scan(path, topic, min_speed):
             d = getattr(m, "drive", m)  # AckermannDriveStamped or AckermannDrive
             if d.speed >= min_speed:
                 steer.append(d.steering_angle)
+                speeds.append(d.speed)
             stamps.append(t_ns)
         elif task_t is not None and name == "/task":
             tasks[deserialize_message(data, task_t).data] += 1
@@ -50,6 +51,7 @@ def scan(path, topic, min_speed):
     dur = (stamps[-1] - stamps[0]) / 1e9 if len(stamps) > 1 else 0.0
     return dict(
         mean=s.mean(),
+        speed=float(np.mean(speeds)),
         left=(s > 0.05).mean(),
         right=(s < -0.05).mean(),
         dur=dur,
@@ -65,7 +67,7 @@ def main():
     ap.add_argument("--min-speed", type=float, default=0.3)
     a = ap.parse_args()
 
-    print(f"{'bag':40s} {'dur':>6s} {'mean':>7s} {'%L':>5s} {'%R':>5s}  direction      task(s)")
+    print(f"{'bag':40s} {'dur':>6s} {'speed':>6s} {'mean':>7s} {'%L':>5s} {'%R':>5s}  direction      task(s)")
     for b in sorted(a.bags):
         b = b.rstrip("/")
         if not os.path.isfile(os.path.join(b, "metadata.yaml")):
@@ -84,7 +86,7 @@ def main():
                                     ("anti" in k) == (res["dir"] == "anticlockwise")
                                     for k in res["tasks"]):
             flag = "  <-- task/steering mismatch?"
-        print(f"{name:40s} {res['dur']:6.0f} {res['mean']:+7.3f} "
+        print(f"{name:40s} {res['dur']:6.0f} {res['speed']:6.2f} {res['mean']:+7.3f} "
               f"{100*res['left']:5.0f} {100*res['right']:5.0f}  "
               f"{res['dir']:13s}  {tasks}{flag}")
 

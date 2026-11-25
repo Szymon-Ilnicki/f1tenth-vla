@@ -160,22 +160,32 @@ def scan_bag(bag_dir, min_speed):
     return (1 if m > 0 else -1), m, tasks
  
  
-def iter_synced(bag_dir, first_task, use_recorded=True):
+def iter_synced(bag_dir, first_task, use_recorded=True, max_cmd_age=None, stats=None):
     """(t, rgb, depth, action, task) per colour frame; task = latest /task so far
-    (first_task until the first /task message of the bag arrives)."""
+    (first_task until the first /task message of the bag arrives). With max_cmd_age,
+    frames whose latest /teleop is older than that are skipped (the joystick only
+    publishes while a deadman button is held, so an old command is not what the
+    car was doing); they are counted in stats["stale"]."""
     wanted = {IMG_TOPIC, DEPTH_TOPIC, CMD_TOPIC, TASK_TOPIC}
     reader = open_bag(bag_dir, wanted)
     types = bag_types(reader, wanted)
     last_cmd = None
+    last_cmd_t = None
     last_depth = None
     task = first_task
     while reader.has_next():
         topic, data, t = reader.read_next()
         if topic not in types:
             continue
+        if topic == IMG_TOPIC and max_cmd_age is not None and last_cmd_t is not None \
+                and (t - last_cmd_t) * 1e-9 > max_cmd_age:
+            if stats is not None:
+                stats["stale"] = stats.get("stale", 0) + 1
+            continue
         msg = deserialize_message(data, types[topic])
         if topic == CMD_TOPIC:
             last_cmd = cmd_vec(msg)
+            last_cmd_t = t
         elif topic == TASK_TOPIC:
             if use_recorded and msg.data:
                 task = msg.data
@@ -247,10 +257,11 @@ class FrameGrid:
         return True
 
 
-def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
+def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True, max_cmd_age=None):
     n = 0
     grid = FrameGrid(fps)
-    for t, img, depth_img, act, task in iter_synced(bag, first_task, use_recorded):
+    stats = {}
+    for t, img, depth_img, act, task in iter_synced(bag, first_task, use_recorded, max_cmd_age, stats):
         if not grid.keep(t):
             continue
         act = act.copy()
@@ -272,6 +283,9 @@ def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
             PROGRESS.tick(n, "mirrored frames" if mirror else "frames")
     if PROGRESS:
         PROGRESS.clear()
+    if stats.get("stale") and not mirror:
+        print(f"    {bag.name}: skipped {stats['stale']} camera frames with stale /teleop "
+              f"(no joystick command for > {max_cmd_age} s)")
     if n:
         ds.save_episode()
     return n
@@ -374,26 +388,30 @@ def add_frames(ds, frames, mirror, counts):
     ds.save_episode()
 
 
-def find_bags(folders, pattern):
-    """Bag directories (containing metadata.yaml) matching pattern in each folder,
-    or the folder itself if it is a bag."""
-    bags = []
+def find_bags(folders, pattern="*"):
+    """All bag directories (containing metadata.yaml) at any depth under each folder,
+    whose name matches pattern, or the folder itself if it is a bag. Sorted by path,
+    duplicates removed."""
+    found = []
     for f in folders:
         f = Path(f).expanduser()
         if (f / "metadata.yaml").is_file():
-            bags.append(f)
+            cands = [f]
         else:
-            bags += [b for b in sorted(f.glob(pattern)) if (b / "metadata.yaml").is_file()]
-    return bags
+            cands = [m.parent for m in f.rglob("metadata.yaml")]
+        found += [b for b in cands if b.match(pattern)]
+    return sorted(set(found))
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--bags", nargs="*", default=[],
-                   help="folder(s) with ep* bag directories of human-driven laps")
+                   help="folder(s) searched recursively for bags of human-driven laps")
     p.add_argument("--takeover-bags", nargs="*", default=[],
-                   help="folder(s) with model-driven bags (any name) or bag directories; "
+                   help="folder(s) searched recursively for model-driven bags; "
                         "only human takeovers are used")
+    p.add_argument("--bag-glob", default="*",
+                   help="only use bag folders whose name matches this (e.g. 'ep*')")
     p.add_argument("--takeover-repeat", type=int, default=3,
                    help="add each takeover episode this many times (oversampling)")
     p.add_argument("--takeover-min-len", type=float, default=0.5,
@@ -410,6 +428,8 @@ def main():
                    help="ignore stationary commands for direction; takeover frames below it are dropped")
     p.add_argument("--default-task", default="complete laps {dir} around the track",
                    help="for bags with no /task; {dir} becomes anticlockwise/clockwise from steering")
+    p.add_argument("--lap-teleop-max-age", type=float, default=0.2,
+                   help="lap bags: skip frames whose /teleop is older than this [s]; 0 = keep all (old behaviour)")
     p.add_argument("--nodir-tasks", nargs="*", default=["stop"],
                    help="tasks that are valid without a direction word (default: stop)")
     p.add_argument("--state-from-task", action="store_true",
@@ -420,16 +440,26 @@ def main():
     global STATE_FROM_TASK, NODIR_TASKS
     STATE_FROM_TASK = a.state_from_task
     NODIR_TASKS = {t.strip().lower() for t in a.nodir_tasks}
+    if a.lap_teleop_max_age <= 0:
+        a.lap_teleop_max_age = None
  
-    bags = find_bags(a.bags, "ep*")
-    tbags = find_bags(a.takeover_bags, "*")
+    bags = find_bags(a.bags, a.bag_glob)
+    tbags = find_bags(a.takeover_bags, a.bag_glob)
     if a.bags and not bags:
-        raise SystemExit(f"no ep* bags found in {a.bags}")
+        raise SystemExit(f"no bags matching '{a.bag_glob}' found in {a.bags}")
     if a.takeover_bags and not tbags:
         raise SystemExit(f"no bags found in {a.takeover_bags}")
     if not bags and not tbags:
         raise SystemExit("give --bags and/or --takeover-bags")
     print(f"found {len(bags)} lap bags, {len(tbags)} takeover bags")
+    for label, group, roots in (("lap", bags, a.bags), ("takeover", tbags, a.takeover_bags)):
+        per = {}
+        for b in group:
+            rel = next((b.parent.relative_to(Path(r).expanduser()) for r in roots
+                        if b.is_relative_to(Path(r).expanduser())), b.parent)
+            per[str(rel)] = per.get(str(rel), 0) + 1
+        for folder, n in sorted(per.items()):
+            print(f"  {label:8s} {n:3d}  {folder}")
     global PROGRESS
     PROGRESS = Progress(len(bags) + len(tbags))
  
@@ -471,7 +501,8 @@ def main():
                     print("SKIPPED", msg)
                     continue
             for mirror in ([False, True] if a.mirror else [False]):
-                n = add_episode(ds, bag, ov, a.fps, mirror, counts, use_recorded=False)
+                n = add_episode(ds, bag, ov, a.fps, mirror, counts, use_recorded=False,
+                                max_cmd_age=a.lap_teleop_max_age)
                 print(f"{PROGRESS.tag} {bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                       f"{mean_steer:+.3f}, task '{mirror_task(ov) if mirror else ov}', {n} frames")
             continue
@@ -497,7 +528,8 @@ def main():
             if not tasks:
                 problems.append(f"{bag.name}: no /task recorded, using '{first_task}' from steering")
         for mirror in ([False, True] if a.mirror else [False]):
-            n = add_episode(ds, bag, first_task, a.fps, mirror, counts, use_recorded)
+            n = add_episode(ds, bag, first_task, a.fps, mirror, counts, use_recorded,
+                        max_cmd_age=a.lap_teleop_max_age)
             shown = mirror_task(first_task) if mirror else first_task
             print(f"{PROGRESS.tag} {bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                   f"{mean_steer:+.3f}, task '{shown}', {n} frames")

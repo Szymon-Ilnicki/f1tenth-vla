@@ -12,8 +12,8 @@ Replaces rosbags_launch.sh + bag_recorder_node.py. Ctrl+C stops the recording
 cleanly and shuts everything down.
 """
 # ==================== CONFIG (edit these) ====================
-BAG_DIR = "~/bags/takeovers_r2"
-BAG_PREFIX = "ep"                     # bags are named <prefix>_<YYYYmmdd_HHMMSS>
+BAG_DIR = "~/bags/track_v6/acw_cone_on_left"
+BAG_PREFIX = "acw-cone-on-left"                     # bags are named <prefix>_<YYYYmmdd_HHMMSS>
 TASK = "complete laps anticlockwise slowly"   # published to /task_in at startup
 
 # What to launch (paths relative to the repo root). POLICY_LAUNCH = None for

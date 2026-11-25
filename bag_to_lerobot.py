@@ -41,6 +41,7 @@ Examples:
       --default-task "complete laps {dir} fast"
 """
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -110,10 +111,22 @@ def bag_types(reader, wanted):
  
  
 def mirror_task(task: str) -> str:
-    """Swap the direction word; "anticlockwise" contains "clockwise", so go via a placeholder."""
-    return (task.replace("anticlockwise", "\0")
-                .replace("clockwise", "anticlockwise")
-                .replace("\0", "clockwise"))
+    """Mirror a task: swap clockwise <-> anticlockwise and left <-> right (whole words).
+    "anticlockwise" contains "clockwise", so go via placeholders."""
+    t = (task.replace("anticlockwise", "\0")
+             .replace("clockwise", "anticlockwise")
+             .replace("\0", "clockwise"))
+    t = re.sub(r"\bleft\b", "\1", t)
+    t = re.sub(r"\bright\b", "left", t)
+    return t.replace("\1", "right")
+
+
+# Tasks that are valid without a direction word (e.g. "stop"); set with --nodir-tasks.
+NODIR_TASKS = {"stop"}
+
+
+def task_valid(task: str) -> bool:
+    return task_direction(task) != 0 or task.strip().lower() in NODIR_TASKS
  
  
 def task_direction(task: str) -> int:
@@ -317,7 +330,7 @@ def takeover_segments(bag, a):
                                                                 task_override(bag)):
         if not grid.keep(t):
             continue
-        if ok and act[0] >= a.min_speed and task_direction(task) == 0:
+        if ok and act[0] >= a.min_speed and not task_valid(task):
             stats["no_dir"] += 1
             ok = False
         if PROGRESS:
@@ -397,13 +410,16 @@ def main():
                    help="ignore stationary commands for direction; takeover frames below it are dropped")
     p.add_argument("--default-task", default="complete laps {dir} around the track",
                    help="for bags with no /task; {dir} becomes anticlockwise/clockwise from steering")
+    p.add_argument("--nodir-tasks", nargs="*", default=["stop"],
+                   help="tasks that are valid without a direction word (default: stop)")
     p.add_argument("--state-from-task", action="store_true",
                    help="write observation.state = [direction +-1, fast 0/1] from the task (for ACT)")
     p.add_argument("--strict", action="store_true",
                    help="skip bags whose recorded task direction disagrees with their steering")
     a = p.parse_args()
-    global STATE_FROM_TASK
+    global STATE_FROM_TASK, NODIR_TASKS
     STATE_FROM_TASK = a.state_from_task
+    NODIR_TASKS = {t.strip().lower() for t in a.nodir_tasks}
  
     bags = find_bags(a.bags, "ep*")
     tbags = find_bags(a.takeover_bags, "*")
@@ -459,7 +475,8 @@ def main():
                 print(f"{PROGRESS.tag} {bag.name} ({'mirrored' if mirror else 'original'}): mean steer "
                       f"{mean_steer:+.3f}, task '{mirror_task(ov) if mirror else ov}', {n} frames")
             continue
-        use_recorded = bool(tasks) and all(task_direction(t) != 0 for t in tasks)
+        use_recorded = bool(tasks) and all(task_valid(t) for t in tasks) \
+            and any(task_direction(t) != 0 for t in tasks)
         if tasks and not use_recorded:
             problems.append(f"{bag.name}: recorded task has no direction word {tasks}; "
                             f"using --default-task from steering instead")

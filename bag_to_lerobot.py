@@ -24,6 +24,11 @@ Takeovers shorter than --takeover-min-len are dropped, and each one is added
 --takeover-repeat times (oversampling) and mirrored with --mirror. The task is the
 recorded /task at that moment; frames whose task has no direction word are dropped.
 
+--state-from-task: observation.state = [direction, fast] taken from each frame's
+task (+1 anticlockwise / -1 clockwise; 1 if the task says "fast", else 0), so
+policies that cannot read text (e.g. ACT) still get the command. Mirrored frames
+get the mirrored task, so the direction sign flips with the image.
+
 Task override: a file task.txt inside a bag's folder replaces the recorded /task
 for every frame of that bag (e.g. when the wrong task was set while recording).
 
@@ -167,6 +172,15 @@ def iter_synced(bag_dir, first_task, use_recorded=True):
             yield t * 1e-9, img_np(msg), last_depth, last_cmd, task
  
  
+STATE_FROM_TASK = False
+
+
+def state_vec(task):
+    if not STATE_FROM_TASK:
+        return np.zeros(2, dtype=np.float32)
+    return np.array([float(task_direction(task)), 1.0 if "fast" in task else 0.0], dtype=np.float32)
+
+
 class Progress:
     """'[i/N] bag' prefix plus an in-place frame counter on the current line."""
 
@@ -236,7 +250,7 @@ def add_episode(ds, bag, first_task, fps, mirror, counts, use_recorded=True):
         ds.add_frame({
             "observation.images.camera1": img,
             "observation.images.camera2": depth_img,
-            "observation.state": np.zeros(2, dtype=np.float32),
+            "observation.state": state_vec(task),
             "action": act,
             "task": task,
         })
@@ -340,7 +354,7 @@ def add_frames(ds, frames, mirror, counts):
         ds.add_frame({
             "observation.images.camera1": img,
             "observation.images.camera2": depth_img,
-            "observation.state": np.zeros(2, dtype=np.float32),
+            "observation.state": state_vec(task),
             "action": act,
             "task": task,
         })
@@ -383,9 +397,13 @@ def main():
                    help="ignore stationary commands for direction; takeover frames below it are dropped")
     p.add_argument("--default-task", default="complete laps {dir} around the track",
                    help="for bags with no /task; {dir} becomes anticlockwise/clockwise from steering")
+    p.add_argument("--state-from-task", action="store_true",
+                   help="write observation.state = [direction +-1, fast 0/1] from the task (for ACT)")
     p.add_argument("--strict", action="store_true",
                    help="skip bags whose recorded task direction disagrees with their steering")
     a = p.parse_args()
+    global STATE_FROM_TASK
+    STATE_FROM_TASK = a.state_from_task
  
     bags = find_bags(a.bags, "ep*")
     tbags = find_bags(a.takeover_bags, "*")
@@ -408,7 +426,8 @@ def main():
                 "dtype": "video", "shape": (240, 424, 3), "names": ["height", "width", "channels"]},
             "observation.images.camera2": {
                 "dtype": "video", "shape": (240, 424, 3), "names": ["height", "width", "channels"]},
-            "observation.state": {"dtype": "float32", "shape": (2,), "names": ["dummy1", "dummy2"]},
+            "observation.state": {"dtype": "float32", "shape": (2,),
+                                  "names": ["direction", "fast"] if a.state_from_task else ["dummy1", "dummy2"]},
             "action": {"dtype": "float32", "shape": (2,), "names": ["speed", "steering"]},
         },
         root=str(Path(a.out).expanduser()),
@@ -502,3 +521,4 @@ def main():
  
 if __name__ == "__main__":
     main()
+ 

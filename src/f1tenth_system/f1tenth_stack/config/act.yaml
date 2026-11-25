@@ -1,0 +1,24 @@
+act_openloop:
+  ros__parameters:
+    model_path: "models/track_v5_act"   # relative to the repo root, like smolvla.yaml
+    stats_path: ""        # empty = checkpoint normaliser files + <model>/dataset_stats.json
+    mode: dual            # rgb | depth | dual (as trained)
+    task: "complete laps anticlockwise slowly"   # -> state [direction, fast]; /task overrides
+    rate_hz: 10.0         # = dataset fps
+    lead_s: 0.0           # ACT plans in ~tens of ms, so start at 0
+    ensemble: true        # average all plans covering the current moment (ACT temporal ensembling)
+    ensemble_coeff: 0.01  # ACT default; larger = smoother/slower to react, negative = favour newest
+    max_image_age_s: 0.5
+    stop_when_empty: true
+    publish_chunk: true
+    action_topic: /smolvla/action      # same topics as the SmolVLA node -> same adapter, same tools
+    infer_dt_topic: /smolvla/infer_dt
+
+smolvla_to_drive:
+  ros__parameters:
+    action_topic: /smolvla/action
+    drive_topic: /drive
+    speed_min: 0.0
+    speed_max: 1.2
+    steer_max: 0.4
+    stale_s: 0.5

@@ -3,7 +3,7 @@ smolvla_openloop:
     policy_id: "lerobot/smolvla_base"
     device: "cuda"
     #model_path: "" #blank for SmolVLA base model
-    model_path: "models/track_v4"
+    model_path: "models/track_v5"
     mode: dual # rgb | depth | dual
     task: "complete laps around the track anticlockwise"
     image_topic: "/camera/camera/color/image_raw"
